@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::Instant;
 use vpn_tunnel::{FlowClass, TunnelConnector, TunnelDatagram};
 
@@ -92,7 +93,7 @@ pub(super) async fn associate<C: TunnelConnector, R: Resolve>(
 const RELAY_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Where the relay sockets of SOCKS5 UDP associations come from.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum RelaySockets {
     /// Bound right here: this process shares the host's loopback (the userspace netstack).
     #[default]
@@ -103,6 +104,7 @@ pub enum RelaySockets {
 }
 
 /// A request for one relay socket bound on `client_ip`, port 0.
+#[derive(Debug)]
 pub struct RelayRequest {
     pub client_ip: IpAddr,
     pub reply: tokio::sync::oneshot::Sender<io::Result<std::net::UdpSocket>>,
@@ -124,11 +126,14 @@ impl RelaySockets {
         let (reply, answer) = tokio::sync::oneshot::channel();
         requests
             .try_send(RelayRequest { client_ip, reply })
-            .map_err(|_| io::Error::other("too many relay requests waiting"))?;
+            .map_err(|e| match e {
+                TrySendError::Full(_) => io::Error::other("too many relay requests waiting"),
+                TrySendError::Closed(_) => io::Error::other("relay requests no longer taken"),
+            })?;
         let socket = tokio::time::timeout(RELAY_REQUEST_TIMEOUT, answer)
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "no relay socket in time"))?
-            .map_err(|_| io::Error::other("relay request dropped"))??;
+            .map_err(|_elapsed| io::Error::new(io::ErrorKind::TimedOut, "no relay socket in time"))?
+            .map_err(|_reply_dropped| io::Error::other("relay request dropped"))??;
         // Whatever arrives must be what was asked for: a socket on the client's loopback.
         if socket.local_addr()?.ip().to_canonical() != client_ip {
             return Err(io::Error::other("relay socket bound elsewhere"));

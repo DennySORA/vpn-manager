@@ -26,7 +26,7 @@ Each exit is reachable as a local SOCKS5/HTTP proxy, and a program you choose ca
 - **Gateways** — local proxy ports on `127.0.0.1` (SOCKS5, HTTP, or both on one port; UDP through SOCKS5). Point a browser or a command-line tool at one.
 - **Managed apps** — VPN Manager starts a program for you and ties it to one connection. Three levels:
   - *Environment variables*: the program is told to use the Gateway.
-  - *Enforced proxy* (macOS): the program can reach nothing but the Gateway.
+  - *Enforced proxy* (macOS): the program can reach nothing but the Gateway, and that only over IPv4 (start Java programs with `-Djava.net.preferIPv4Stack=true`).
   - *Strict isolation* (Linux): the program runs in a network namespace of its own, where the tunnel is the only network interface.
 - **SSH** — let chosen SSH hosts connect through a connection, and pull new files from a remote folder over SFTP on a schedule ("SSH downloads"), only ever through the VPN.
 
@@ -76,7 +76,7 @@ Then open **<http://127.0.0.1:18765>**. If that port is taken, the installer pic
 Options go after `sh -s --`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/install.sh | sh -s -- --version 0.1.0   # a specific version
+curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/install.sh | sh -s -- --version 0.2.0   # a specific version
 curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/install.sh | sh -s -- --port 18765      # other options are passed to the installer
 ```
 
@@ -153,7 +153,7 @@ vpnctl doctor                      # check the installation
 
 ## Good to know
 
-- **This is 0.1.0.** It is used every day on Linux x86_64. macOS and Linux aarch64 installers are built by the release workflow, but they have had much less real use; strict isolation exists on Linux only. The API, the configuration and the data formats may still change in incompatible ways.
+- **This is 0.2.0.** It is used every day on Linux x86_64. macOS and Linux aarch64 installers are built by the release workflow, but they have had much less real use; strict isolation exists on Linux only. The API, the configuration and the data formats may still change in incompatible ways.
 - **There is no login.** By default the web interface and the API answer only on this computer and only to programs of the same user. Whoever can use them can start programs as you, so treat that access like a shell. If you open it to your network, every device in the networks you list gets the same access, over plain HTTP.
 - **Gateways have no password.** Any program on this computer can use a running connection through its Gateway.
 - **Isolation is about the network path.** Strict isolation makes the tunnel the only way out for a program; it is not a sandbox for running code you do not trust.

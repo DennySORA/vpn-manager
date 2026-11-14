@@ -189,6 +189,10 @@ impl From<UnknownMetricsScope> for Text {
 impl FromStr for MetricsScope {
     type Err = UnknownMetricsScope;
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "every unparsable scope gets the one fixed, translated `UnknownMetricsScope` message; why the id is not a UUID is not part of it"
+    )]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         if s == "all" {
@@ -642,6 +646,10 @@ pub struct MetricsRetention {
 /// A time per stored resolution (unix ms); `null` where there is none.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "`_ms` names each field's unit (unix ms), and the names are the JSON and generated TypeScript contract"
+)]
 pub struct MetricsTierTimes {
     #[ts(type = "number | null")]
     pub raw_ms: Option<i64>,

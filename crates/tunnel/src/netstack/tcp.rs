@@ -240,7 +240,7 @@ pub(super) async fn connect_from(
     };
     let established = poll_fn(|cx| {
         let mut guard = shared.stack.lock();
-        let socket = guard.sockets.get_mut::<stcp::Socket>(handle);
+        let socket = guard.sockets.get_mut::<stcp::Socket<'_>>(handle);
         match socket.state() {
             State::SynSent | State::SynReceived => {
                 socket.register_send_waker(cx.waker());
@@ -285,6 +285,7 @@ pub(super) async fn connect_from(
 
 /// A TCP connection carried by the tunnel. Dropping it closes the connection gracefully (FIN);
 /// the netstack frees the socket once the close completed or the linger time expired.
+#[derive(Debug)]
 pub struct TcpStream {
     shared: Arc<Shared>,
     handle: SocketHandle,
@@ -307,7 +308,10 @@ impl TcpStream {
     /// Reset the connection immediately instead of a graceful close.
     pub fn abort(&self) {
         let mut guard = self.shared.stack.lock();
-        guard.sockets.get_mut::<stcp::Socket>(self.handle).abort();
+        guard
+            .sockets
+            .get_mut::<stcp::Socket<'_>>(self.handle)
+            .abort();
         drop(guard);
         self.shared.wake.notify_one();
     }
@@ -323,7 +327,7 @@ impl TcpStream {
     /// (see [`Growth`]). Everything it holds stays in place; only its size changes.
     fn follow_use(&mut self, stack: &mut Stack, side: Side, moved: usize) {
         let (window, round_trip) = (self.growth.window, self.growth.round_trip);
-        let socket = stack.sockets.get_mut::<stcp::Socket>(self.handle);
+        let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(self.handle);
         let (capacity, max, meter) = match side {
             Side::Rx => (
                 socket.recv_capacity(),
@@ -344,7 +348,7 @@ impl TcpStream {
     /// Double the buffer `side`, up to the size the transport allows and while the buffer
     /// budget has room for it; whether it grew.
     fn enlarge(&self, stack: &mut Stack, side: Side) -> bool {
-        let socket = stack.sockets.get_mut::<stcp::Socket>(self.handle);
+        let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(self.handle);
         let (capacity, max) = match side {
             Side::Rx => (socket.recv_capacity(), self.growth.rx_max),
             Side::Tx => (socket.send_capacity(), self.growth.tx_max),
@@ -391,7 +395,7 @@ impl AsyncRead for TcpStream {
         let this = self.get_mut();
         let shared = this.shared.clone();
         let mut guard = shared.stack.lock();
-        let socket = guard.sockets.get_mut::<stcp::Socket>(this.handle);
+        let socket = guard.sockets.get_mut::<stcp::Socket<'_>>(this.handle);
         match socket.recv_slice(buf.initialize_unfilled()) {
             Ok(0) => {
                 if socket.may_recv() {
@@ -429,7 +433,7 @@ impl AsyncWrite for TcpStream {
         let this = self.get_mut();
         let shared = this.shared.clone();
         let mut guard = shared.stack.lock();
-        let socket = guard.sockets.get_mut::<stcp::Socket>(this.handle);
+        let socket = guard.sockets.get_mut::<stcp::Socket<'_>>(this.handle);
         match socket.send_slice(data) {
             Ok(0) => {
                 if socket.may_send() {
@@ -459,7 +463,10 @@ impl AsyncWrite for TcpStream {
 
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut guard = self.shared.stack.lock();
-        guard.sockets.get_mut::<stcp::Socket>(self.handle).close();
+        guard
+            .sockets
+            .get_mut::<stcp::Socket<'_>>(self.handle)
+            .close();
         drop(guard);
         self.shared.wake.notify_one();
         Poll::Ready(Ok(()))
@@ -474,6 +481,7 @@ impl Drop for TcpStream {
 
 /// Inbound TCP on one tunnel port. Keeps `backlog` sockets listening so concurrent SYNs are
 /// accepted; smoltcp turns a listening socket into the connection itself.
+#[derive(Debug)]
 pub struct TcpListener {
     shared: Arc<Shared>,
     port: u16,
@@ -597,7 +605,7 @@ impl TcpListener {
             let mut guard = shared.stack.lock();
             let stack = &mut *guard;
             for (i, (handle, _)) in self.listening.iter().enumerate() {
-                let socket = stack.sockets.get_mut::<stcp::Socket>(*handle);
+                let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(*handle);
                 match socket.state() {
                     State::Listen | State::SynReceived => {
                         socket.register_recv_waker(cx.waker());
@@ -614,9 +622,17 @@ impl TcpListener {
                         }
                     }
                     _ => {
-                        // Reset before we accepted it: recycle the slot.
+                        // Reset before we accepted it: recycle the slot. (An aborted socket is
+                        // closed and the port is not 0, so listening again does not fail; a
+                        // slot that did stays closed and is tried again on the next poll.)
                         socket.abort();
-                        let _ = socket.listen(self.port);
+                        if let Err(e) = socket.listen(self.port) {
+                            tracing::debug!(
+                                port = self.port,
+                                error = %e,
+                                "listening socket not recycled"
+                            );
+                        }
                         socket.register_recv_waker(cx.waker());
                     }
                 }

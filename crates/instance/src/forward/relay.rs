@@ -45,7 +45,7 @@ where
             app.write_all(header).await?;
             app.flush().await
         });
-        sent.await.map_err(|_| {
+        sent.await.map_err(|_elapsed| {
             io::Error::new(
                 io::ErrorKind::TimedOut,
                 "the App did not take the PROXY header in time",
@@ -99,7 +99,9 @@ where
         let n = reader.read(&mut buf).await?;
         if n == 0 {
             // Propagate EOF. A peer that is already gone cannot be shut down; nothing is lost.
-            let _ = writer.shutdown().await;
+            if let Err(e) = writer.shutdown().await {
+                tracing::trace!(error = %e, "EOF not passed on: the peer is gone");
+            }
             return Ok(());
         }
         writer.write_all(&buf[..n]).await?;

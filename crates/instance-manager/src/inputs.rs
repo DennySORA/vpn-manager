@@ -18,6 +18,10 @@ pub struct WorkerInputs {
     security: Option<String>,
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "plain configuration values (ids, numbers, strings, keys, addresses; no maps) always serialize to JSON"
+)]
 fn fingerprint(value: &impl Serialize) -> String {
     // Struct fields serialize in declaration order and these types hold no maps, so equal
     // inputs give equal bytes.

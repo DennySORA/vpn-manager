@@ -66,7 +66,7 @@ use vpn_platform::paths::{Paths, ensure_private_dir};
 use vpn_store::{AppIntentRow, AppRunRecord, Store, StoreError};
 use vpn_sync::{Mutex, RwLock};
 
-use crate::{Manager, ManagerEvent};
+use crate::{Manager, ManagerEvent, remove_dir_if_present, remove_file_if_present, send_event};
 use access::{AccessPorts, Relay, RunAccess};
 use launch::GatewayTarget;
 
@@ -105,6 +105,13 @@ fn fault(code: &str, message: impl Into<Text>) -> Fault {
 )]
 fn api(e: StoreError) -> ApiError {
     e.to_api()
+}
+
+/// The blocking task of a call did not finish (it panicked): an internal error, whose message
+/// sends the user to the service log — where its cause is.
+fn task_failed(e: &tokio::task::JoinError) -> ApiError {
+    tracing::error!(error = %e, "a blocking task of a managed-app call failed");
+    ApiError::internal()
 }
 
 fn field_error(
@@ -218,6 +225,9 @@ pub(crate) struct TreeSockets {
     /// The processes of the tree that pass looked at: a port one of them holds that the pass
     /// did not see was bound after it.
     pub pids: Vec<u32>,
+    /// Every local port the tree holds off loopback, `(udp, port)`: listening, connected or
+    /// bound. A strict App's payload through the sandbox is told apart by them.
+    pub ports: Vec<(bool, u16)>,
     pub at: Instant,
 }
 
@@ -359,6 +369,14 @@ pub struct Apps {
     changes: watch::Sender<u64>,
     /// The host's listeners of the Apps' local access ports.
     access: Arc<AccessPorts>,
+}
+
+impl std::fmt::Debug for Apps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Apps")
+            .field("paths", &self.paths)
+            .finish_non_exhaustive()
+    }
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -526,7 +544,8 @@ async fn prepare_dirs(
         Ok(())
     })
     .await
-    .map_err(|_| {
+    .map_err(|e| {
+        tracing::error!(error = %e, "making an app run's directories failed");
         StartError::new(
             "APP_RUN_DIR_UNAVAILABLE",
             tr!(
@@ -559,7 +578,10 @@ fn limits_not_applied(
     if let Some(l) = leaf
         && !l.contains(root.pid)
     {
-        let _ = l.place(root.pid);
+        // Whether it joined is checked below; the reason it did not goes to the log.
+        if let Err(e) = l.place(root.pid) {
+            tracing::debug!(cgroup = l.rel(), error = %e, "app root not placed in its cgroup");
+        }
         if !l.contains(root.pid) && limits.wants_cgroup() {
             not_applied = Some(tr!(
                 "the app did not join its cgroup",
@@ -626,9 +648,14 @@ async fn abandon(
     leaf: Option<&Leaf>,
 ) {
     backend.terminate(root, &[root], true);
-    let _ = child.wait().await;
-    if let Some(l) = leaf {
-        let _ = l.kill();
+    if let Err(e) = child.wait().await {
+        tracing::warn!(pid = root.pid, error = %e, "abandoned app root not reaped");
+    }
+    if let Some(l) = leaf
+        && let Err(e) = l.kill()
+    {
+        // Its removal below fails then too, and says so.
+        tracing::debug!(cgroup = l.rel(), error = %e, "app cgroup not killed");
     }
     remove_leaf(leaf);
 }
@@ -647,7 +674,10 @@ async fn cgroup_resources(entry: &Entry, alive: &[ProcessIdentity]) -> Option<Re
     tokio::task::spawn_blocking(move || {
         let inside = leaf.pids().unwrap_or_default();
         for pid in members.into_iter().filter(|p| !inside.contains(p)) {
-            let _ = leaf.place(pid);
+            // Best effort: one that did not join is tried again on the next pass.
+            if let Err(e) = leaf.place(pid) {
+                tracing::trace!(cgroup = leaf.rel(), pid, error = %e, "app process not placed in its cgroup");
+            }
         }
         run_resources(Some(&leaf), &limits)
     })
@@ -670,6 +700,7 @@ async fn scan_sockets(
         // An `enforced_proxy` App cannot connect anywhere but the Gateway on 127.0.0.1: a
         // connection with another local address came in from the network.
         let mut reached = Vec::new();
+        let mut ports = Vec::new();
         let mut seen = Vec::with_capacity(pids.len());
         for p in pids {
             seen.push(p.pid);
@@ -677,6 +708,20 @@ async fn scan_sockets(
             // sandbox's).
             match proc::all_sockets(p.pid) {
                 Some(s) => {
+                    let off_loopback =
+                        |a: &std::net::SocketAddr| !a.ip().to_canonical().is_loopback();
+                    ports.extend(
+                        s.tcp
+                            .iter()
+                            .filter(|t| off_loopback(&t.local))
+                            .map(|t| (false, t.local.port())),
+                    );
+                    ports.extend(
+                        s.udp
+                            .iter()
+                            .filter(|a| off_loopback(a))
+                            .map(|a| (true, a.port())),
+                    );
                     for t in &s.tcp {
                         if t.listening {
                             out.push(AppListener {
@@ -685,7 +730,7 @@ async fn scan_sockets(
                                 loopback: t.local.ip().to_canonical().is_loopback(),
                             });
                             tcp.push(t.local);
-                        } else if t.from_network() {
+                        } else if t.is_from_network() {
                             reached.push(t.remote.map_or_else(
                                 || t.local.to_string(),
                                 |r| format!("{} ← {r}", t.local),
@@ -707,12 +752,15 @@ async fn scan_sockets(
         out.dedup();
         reached.sort();
         reached.dedup();
+        ports.sort_unstable();
+        ports.dedup();
         Some((
             out,
             TreeSockets {
                 tcp,
                 udp,
                 pids: seen,
+                ports,
                 at: Instant::now(),
             },
             reached,
@@ -936,11 +984,14 @@ fn exit_message(exit: &AppExit) -> Text {
 /// The run's tree is gone: its cgroup goes too. A process still in it (one that left the
 /// tracked tree, but never the App's cgroup) is the App's own and is killed first.
 async fn release_leaf(leaf: Arc<Leaf>) {
-    let _ = tokio::task::spawn_blocking(move || {
+    let released = tokio::task::spawn_blocking(move || {
         for _ in 0..20 {
             match leaf.pids() {
                 Some(p) if !p.is_empty() => {
-                    let _ = leaf.kill();
+                    // Tried again until the cgroup is empty; its removal says if it never is.
+                    if let Err(e) = leaf.kill() {
+                        tracing::debug!(cgroup = leaf.rel(), error = %e, "app cgroup not killed");
+                    }
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 _ => break,
@@ -951,6 +1002,9 @@ async fn release_leaf(leaf: Arc<Leaf>) {
         }
     })
     .await;
+    if let Err(e) = released {
+        tracing::error!(error = %e, "releasing an app cgroup failed");
+    }
 }
 
 /// Whether the root of a run, which just exited 0, most likely handed its start over to a
@@ -1171,7 +1225,7 @@ impl Apps {
     }
 
     fn emit(&self, status: AppStatus) {
-        let _ = self.events.send(ManagerEvent::AppStatus(Box::new(status)));
+        send_event(&self.events, ManagerEvent::AppStatus(Box::new(status)));
         self.changed();
     }
 
@@ -1269,6 +1323,47 @@ impl Apps {
         entries.iter().map(|e| self.view(&e.live.lock())).collect()
     }
 
+    /// Which App of `instance`'s strict sandbox holds each local port, `(udp, port)`, as the
+    /// latest watcher pass of each running App saw it. A port two Apps hold (one ended, the
+    /// other took it since) belongs to neither.
+    pub(crate) fn strict_ports(&self, instance: InstanceId) -> HashMap<(bool, u16), AppId> {
+        let entries: Vec<(AppId, Arc<Entry>)> = self
+            .entries
+            .lock()
+            .iter()
+            .map(|(id, e)| (*id, e.clone()))
+            .collect();
+        let mut owners: HashMap<(bool, u16), Option<AppId>> = HashMap::new();
+        for (id, entry) in entries {
+            let held: Vec<(bool, u16)> = {
+                let live = entry.live.lock();
+                live.run
+                    .as_ref()
+                    .filter(|r| {
+                        r.instance_id == instance
+                            && r.isolation == AppIsolation::StrictNetns
+                            && !r.stopping
+                    })
+                    .and_then(|r| r.sockets.as_ref())
+                    .map_or_default(|s| s.ports.clone())
+            };
+            for key in &held {
+                owners
+                    .entry(*key)
+                    .and_modify(|o| {
+                        if *o != Some(id) {
+                            *o = None;
+                        }
+                    })
+                    .or_insert(Some(id));
+            }
+        }
+        owners
+            .into_iter()
+            .filter_map(|(k, o)| o.map(|id| (k, id)))
+            .collect()
+    }
+
     /// The process trees this manager supervises, for the recovery report.
     pub fn resources(&self) -> Vec<AppResource> {
         let entries: Vec<(AppId, Arc<Entry>)> = self
@@ -1331,7 +1426,7 @@ impl Apps {
         let private = self.private();
         tokio::task::spawn_blocking(move || executable::inspect(&path, &private))
             .await
-            .map_err(|_| ApiError::internal())
+            .map_err(|e| task_failed(&e))
     }
 
     /// The processes of the App's current run.
@@ -1382,7 +1477,7 @@ impl Apps {
             Some((processes, more))
         })
         .await
-        .map_err(|_| ApiError::internal())?;
+        .map_err(|e| task_failed(&e))?;
         let (processes, truncated) = listed.ok_or_else(|| {
             ApiError::new(
                 ErrorCode::Unavailable,
@@ -1413,8 +1508,9 @@ impl Apps {
         let n = lines.clamp(1, MAX_LOG_LINES) as usize;
         let (lines, truncated) = tokio::task::spawn_blocking(move || app_log::tail(&path, n))
             .await
-            .map_err(|_| ApiError::internal())?
-            .map_err(|_| {
+            .map_err(|e| task_failed(&e))?
+            .map_err(|e| {
+                tracing::warn!(app = %id, error = %e, "app output log not read");
                 ApiError::new(
                     ErrorCode::Unavailable,
                     tr!(
@@ -1478,7 +1574,7 @@ impl Apps {
         let exe = spec.executable.clone();
         let class = tokio::task::spawn_blocking(move || executable::recognise(&exe))
             .await
-            .map_err(|_| ApiError::internal())?;
+            .map_err(|e| task_failed(&e))?;
         let report = check_app_class(spec, class.as_ref());
         if report.has_errors() {
             return Err(report_error(&report));
@@ -1617,7 +1713,7 @@ impl Apps {
             })
         })
         .await
-        .map_err(|_| ApiError::internal())?;
+        .map_err(|e| task_failed(&e))?;
         if let Some(i) = overlap {
             return Err(field_error(
                 ErrorCode::ValidationFailed,
@@ -1903,17 +1999,21 @@ impl Apps {
             self.paths.app_tmp(&ids),
             self.paths.app_log(&ids),
         );
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = std::fs::remove_dir_all(&dir);
+        // The App is deleted: what of its files cannot be removed stays behind (logged).
+        let removed = tokio::task::spawn_blocking(move || {
+            remove_dir_if_present(&dir);
             if !tmp.starts_with(&dir) {
-                let _ = std::fs::remove_dir_all(&tmp);
+                remove_dir_if_present(&tmp);
             }
             let mut old = log.clone().into_os_string();
             old.push(".1");
-            let _ = std::fs::remove_file(&log);
-            let _ = std::fs::remove_file(PathBuf::from(old));
+            remove_file_if_present(&log);
+            remove_file_if_present(&PathBuf::from(old));
         })
         .await;
+        if let Err(e) = removed {
+            tracing::error!(app = %id, error = %e, "removing a deleted app's files failed");
+        }
         Ok(())
     }
 
@@ -2509,7 +2609,8 @@ impl Apps {
                     })
                 })
                 .await
-                .map_err(|_| {
+                .map_err(|e| {
+                    tracing::error!(app = %spec.id, error = %e, "generating an app's sandbox profile failed");
                     StartError::new(
                         "APP_SANDBOX_PROFILE",
                         tr!(
@@ -2621,7 +2722,8 @@ impl Apps {
             })
         })
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::error!(app = %spec.id, error = %e, "checking an app's executable failed");
             StartError::new(
                 "APP_EXECUTABLE_INVALID",
                 tr!(
@@ -2747,9 +2849,13 @@ impl Apps {
         if oom.is_some() {
             tracing::warn!(app = %id, "managed app killed by the kernel: memory limit");
         }
-        let _ = self
+        // How the run ended is on the App's status; a stop not confirmed is logged by `end_run`.
+        if let Err(e) = self
             .end_run(&entry, id, &run_id, Some(reason), failed)
-            .await;
+            .await
+        {
+            tracing::debug!(app = %id, error = %e, "the exited app's run did not end cleanly");
+        }
     }
 
     /// Stop the App: its whole tree, confirmed. `user`: the user asked, so the durable intent
@@ -3132,7 +3238,10 @@ impl Apps {
             tracing::warn!(app = %id, code = %reason.code, "stopping managed app");
             let me = Arc::clone(self);
             tokio::spawn(async move {
-                let _ = me.stop(id, false, Some(reason)).await;
+                // Its outcome is on the App's status; a stop not confirmed is logged by `stop`.
+                if let Err(e) = me.stop(id, false, Some(reason)).await {
+                    tracing::debug!(app = %id, error = %e, "managed app not stopped cleanly");
+                }
             });
         }
     }
@@ -3242,7 +3351,9 @@ impl Apps {
             if let Some(manager) = manager.upgrade() {
                 tracing::info!(app = %id, "app meant to run: starting it again");
                 // Its failure, if any, is recorded on the App by `start`.
-                let _ = self.start(&manager, id, false, RECOVERY_GATEWAY_WAIT).await;
+                if let Err(e) = self.start(&manager, id, false, RECOVERY_GATEWAY_WAIT).await {
+                    tracing::debug!(app = %id, error = %e, "app not started again");
+                }
             }
             return;
         }
@@ -3332,7 +3443,9 @@ impl Apps {
             && spec.as_ref().is_some_and(|s| s.restart_on_recovery);
         if restart && let Some(manager) = manager.upgrade() {
             // Its failure, if any, is recorded on the App by `start`.
-            let _ = self.start(&manager, id, false, RECOVERY_GATEWAY_WAIT).await;
+            if let Err(e) = self.start(&manager, id, false, RECOVERY_GATEWAY_WAIT).await {
+                tracing::debug!(app = %id, error = %e, "recovered app not started again");
+            }
             return;
         }
         let message = match outcome {

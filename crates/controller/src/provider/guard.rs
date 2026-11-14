@@ -140,6 +140,7 @@ struct Ticket {
 }
 
 /// The guard of one operation, pinned to the route it started on.
+#[derive(Debug)]
 pub struct Guard<'a, E: Egress> {
     egress: &'a E,
     providers: &'a Providers,

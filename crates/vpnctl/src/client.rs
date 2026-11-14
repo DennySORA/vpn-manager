@@ -96,6 +96,9 @@ impl Client {
         body: Option<Vec<u8>>,
         headers: &[(&'static str, String)],
     ) -> Result<Answer, Transport> {
+        vpn_platform::paths::verify_socket_dir(&self.socket).map_err(|e| {
+            Transport::NotSent(format!("不連線：API socket 所在的目錄不可信任（{e}）"))
+        })?;
         let stream = UnixStream::connect(&self.socket)
             .await
             .map_err(|e| Transport::NotSent(connect_error(&self.socket, &e)))?;
@@ -103,6 +106,10 @@ impl Client {
             .await
             .map_err(|e| Transport::NotSent(e.to_string()))?;
         tokio::spawn(async move {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a connection failure that matters fails the request (send_request or the body read); after the answer it changes nothing"
+            )]
             let _ = conn.await;
         });
         let mut req = Request::builder()
@@ -122,7 +129,7 @@ impl Client {
         // From here on the controller may have received it.
         let resp = tokio::time::timeout(REQUEST_TIMEOUT, sender.send_request(req))
             .await
-            .map_err(|_| Transport::Lost("沒有在時限內收到回應".into()))?
+            .map_err(|_elapsed| Transport::Lost("沒有在時限內收到回應".into()))?
             .map_err(|e| Transport::Lost(e.to_string()))?;
         let status = resp.status();
         let etag = resp

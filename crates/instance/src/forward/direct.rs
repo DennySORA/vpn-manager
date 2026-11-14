@@ -56,10 +56,12 @@ impl DirectUdpPolicy for Direct {
 
     fn ended(&self) {
         // Paired with `started` by the filter; never below zero all the same.
-        let _ = self
-            .counters
-            .udp_active
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+        let active = &self.counters.udp_active;
+        let decremented =
+            active.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+        if decremented.is_err() {
+            tracing::trace!("direct UDP flow ended without being counted started");
+        }
     }
 
     fn received(&self, bytes: u64) {

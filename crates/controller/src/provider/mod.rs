@@ -45,7 +45,7 @@ use vpn_ipc::relay::{self, RelayAnswer, RelayEpochs, RelayFamily, RelayLine, Rel
 use vpn_providers::airvpn::{self, AirVpn, Credentials, InvalidCredentials, ServerWarning};
 use vpn_providers::https::{BoxedStream, Connect, Family, HttpsClient};
 use vpn_providers::mullvad::{
-    self, AccessToken, AccountNumber, Mullvad, MultihopPorts, RelayCatalog,
+    self, AccessToken, AccountNumber, InvalidAccountNumber, Mullvad, MultihopPorts, RelayCatalog,
 };
 use vpn_providers::{ProviderError, Refusal, Tls, ipcheck};
 use vpn_sync::Mutex;
@@ -148,6 +148,14 @@ impl Relay {
         let mut line = RelayLine::new(host, port, family, self.route);
         line.expect = expect;
         let io = |m: Text| RelayError::Io(channel_error(io::ErrorKind::Other, m));
+        if let Err(e) = vpn_platform::paths::verify_socket_dir(&self.path) {
+            tracing::warn!(path = %self.path.display(), error = %e, "provider channel not used: its directory is not this user's own");
+            return Err(io(tr!(
+                "The provider channel's directory is not this user's own, so it was not used",
+                "供應商通道所在的目錄不屬於目前使用者，因此沒有使用",
+                "プロバイダーチャネルのディレクトリが現在のユーザーのものではないため、使用しませんでした"
+            )));
+        }
         let mut s = UnixStream::connect(&*self.path).await.map_err(|e| {
             RelayError::Io(channel_error(
                 e.kind(),
@@ -187,8 +195,10 @@ impl Relay {
                 )));
             }
         }
-        let answer: RelayAnswer =
-            serde_json::from_slice(&reply).map_err(|_| io(malformed_answer()))?;
+        let answer: RelayAnswer = serde_json::from_slice(&reply).map_err(|e| {
+            tracing::warn!(error = %e, "the provider channel's answer is not the relay protocol's");
+            io(malformed_answer())
+        })?;
         // The connector's own words, as it wrote them.
         let message = || {
             answer.message.clone().map_or_else(
@@ -276,6 +286,7 @@ fn state_of(reply: Reply) -> Result<EgressState, ApiError> {
 
 /// The egress as the manager answers for it: the binding, the open grant, the active (else
 /// latest) run of the direct exception, and whether the selected egress needs recovery.
+#[derive(Debug)]
 pub struct EgressState {
     pub egress: ProviderEgress,
     pub grant: Option<BootstrapGrantWire>,
@@ -624,7 +635,7 @@ async fn store_profile(
     };
     if created.is_err() {
         for r in fresh {
-            let _ = link.call(Call::DeleteSecret(r)).await;
+            link.discard_secret(r).await;
         }
     }
     created
@@ -752,7 +763,7 @@ async fn mullvad_device(
                 }
             }
             Err(e) => {
-                let _ = link.call(Call::DeleteSecret(secret)).await;
+                link.discard_secret(secret).await;
                 Err(provider_error(&e))
             }
         }
@@ -794,7 +805,7 @@ async fn store_airvpn_keys(
         Ok(r) => r,
         Err(e) => {
             for r in fresh {
-                let _ = link.call(Call::DeleteSecret(r)).await;
+                link.discard_secret(r).await;
             }
             return Err(e);
         }
@@ -895,7 +906,7 @@ pub fn searchable(count: u8) -> Result<(), ApiError> {
 /// One `AirVPN` port in the API's terms; `list` names its device when it is limited to one.
 fn forwarded_port(p: &airvpn::site::Port, list: Option<&airvpn::site::PortList>) -> ForwardedPort {
     ForwardedPort {
-        port: p.port,
+        port: p.number,
         pool: p.pool,
         enabled: p.enabled,
         protocol: p.protocol,
@@ -1030,6 +1041,7 @@ fn field_error(path: &str, message: impl Into<Text>) -> ApiError {
 type MullvadApi<'a> = Mullvad<Guard<'a, ManagerLink>>;
 
 /// `AirVPN` servers whose entry addresses `AirVPN`'s TLS-verified status list confirmed.
+#[derive(Debug)]
 pub struct AirCatalog {
     pub servers: Vec<airvpn::Server>,
     /// The manifest's UDP `WireGuard` modes, the default first.
@@ -1038,7 +1050,7 @@ pub struct AirCatalog {
     pub excluded: usize,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Providers {
     /// The TLS trust of every provider request and exit check.
     tls: Tls,
@@ -1456,8 +1468,9 @@ impl Providers {
         }
         match &input.credential {
             ProviderCredentialInput::Mullvad { account_number } => {
-                let number = AccountNumber::parse(account_number)
-                    .map_err(|e| field_error("/credential/account_number", e.text()))?;
+                let number = AccountNumber::parse(account_number).map_err(|_invalid| {
+                    field_error("/credential/account_number", InvalidAccountNumber::text())
+                })?;
                 let digits = Zeroizing::new(
                     account_number
                         .chars()
@@ -1541,9 +1554,9 @@ impl Providers {
         account: &ProviderAccount,
     ) -> Result<Credentials, ApiError> {
         let raw = lease(link, account.credential_ref).await?;
-        let text = std::str::from_utf8(&raw).map_err(|_| ApiError::internal())?;
+        let text = std::str::from_utf8(&raw).map_err(|e| unreadable_credential(account.id, &e))?;
         let (user, pass) = text.split_once('\n').ok_or_else(ApiError::internal)?;
-        Credentials::new(user, pass).map_err(|_| ApiError::internal())
+        Credentials::new(user, pass).map_err(|e| unreadable_credential(account.id, &e))
     }
 
     /// The account's user record (devices and their keys) over the current route.
@@ -1697,7 +1710,7 @@ impl Providers {
             },
             Ok(_) => Err(ApiError::internal()),
             Err(e) => {
-                let _ = link.call(Call::DeleteSecret(secret)).await;
+                link.discard_secret(secret).await;
                 Err(e)
             }
         }
@@ -1721,8 +1734,10 @@ impl Providers {
             t
         } else {
             let digits = lease(link, account.credential_ref).await?;
-            let text = std::str::from_utf8(&digits).map_err(|_| ApiError::internal())?;
-            let number = AccountNumber::parse(text).map_err(|_| ApiError::internal())?;
+            let text =
+                std::str::from_utf8(&digits).map_err(|e| unreadable_credential(account.id, &e))?;
+            let number =
+                AccountNumber::parse(text).map_err(|e| unreadable_credential(account.id, &e))?;
             let t = Arc::new(api.token(&number).await.map_err(|e| provider_error(&e))?);
             self.tokens.lock().insert(account.id, t.clone());
             t
@@ -1930,7 +1945,7 @@ impl Providers {
                     .air_peer
                     .lock()
                     .get(&account.id)
-                    .map_or_default(std::string::ToString::to_string);
+                    .map_or_default(ToString::to_string);
                 Ok(catalog
                     .servers
                     .iter()
@@ -2052,7 +2067,7 @@ impl Providers {
                     .await
                     .map_err(|e| provider_error(&e))?;
                 if let Some(secret) = secret {
-                    let _ = link.call(Call::DeleteSecret(secret)).await;
+                    link.discard_secret(secret).await;
                 }
                 Ok(())
             }
@@ -2289,7 +2304,7 @@ impl Providers {
             .await;
         self.ports_gate(
             result.as_ref().map(|p| {
-                let port = p.port;
+                let port = p.number;
                 tr!(
                     "Reserved inbound port {port} on AirVPN's website",
                     "已在 AirVPN 網站保留連入埠 {port}",
@@ -2524,13 +2539,15 @@ impl Providers {
             }
             None => work.await,
         };
+        // Nothing was built: the next request may build the run's connection.
         if built.is_err()
             && let Some(run) = run
-        {
-            // Nothing was built: the next request may build the run's connection.
-            let _ = link
+            && let Err(e) = link
                 .call(Call::BootstrapReleaseChild { run, operation })
-                .await;
+                .await
+        {
+            // Not released, the reservation lapses at the end of its lifetime in the Store.
+            tracing::debug!(error = %e, "reservation of the run's connection not released");
         }
         built
     }
@@ -3168,4 +3185,11 @@ async fn lease(link: &ManagerLink, r: SecretRef) -> Result<Zeroizing<Vec<u8>>, A
         Reply::SecretBytes(b) => Ok(Zeroizing::new(b.expose().to_vec())),
         _ => Err(ApiError::internal()),
     }
+}
+
+/// `account`'s leased credential is not in the form it was stored in: an internal error, with
+/// `why` in the service log (where its UTF-8 breaks, or which rule it breaks: never its content).
+fn unreadable_credential(account: ProviderAccountId, why: &impl std::fmt::Display) -> ApiError {
+    tracing::error!(%account, error = %why, "stored provider credential unreadable");
+    ApiError::internal()
 }

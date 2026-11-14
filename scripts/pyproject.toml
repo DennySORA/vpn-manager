@@ -12,16 +12,25 @@ dev = [
   "mypy==2.4.1",
   "ruff==0.17.4",
   "shellcheck-py==0.11.0.1",
+  "shfmt-py==4.2.0",
 ]
 
 [tool.uv]
 package = false
+# Dependency cooldown: a release is taken a day after it appears (compromised releases are usually
+# pulled within hours). Wheels only: nothing is built from source.
+exclude-newer = "1 day"
+no-build = true
 
 [tool.ruff]
 # The scripts promise Python 3.9+ on the host (see their docstrings): lint and format for that.
 target-version = "py39"
 line-length = 100
 cache-dir = ".venv/.ruff_cache"
+force-exclude = true
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -38,8 +47,43 @@ ignore = [
 ]
 
 [tool.mypy]
+files = [
+  "leak_capture.py",
+  "leak_scenarios.py",
+  "public_export.py",
+  "text_guard.py",
+  "third_party_notices.py",
+]
 strict = true
 # mypy checks against 3.10 at the lowest; ruff target-version py39 keeps the syntax 3.9-safe.
 python_version = "3.10"
+# The leak tools run on Linux (AF_PACKET, EBADFD); the other scripts use nothing platform-specific,
+# so every host checks them as Linux and gets the same answer.
+platform = "linux"
 cache_dir = ".venv/.mypy_cache"
 warn_unreachable = true
+# What `strict` turns on, stated so a newer mypy cannot drop one silently, and more.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+strict_equality_for_none = true
+show_error_codes = true
+enable_error_code = [
+  "ignore-without-code",
+  "redundant-expr",
+  "redundant-self",
+  "truthy-bool",
+  "truthy-iterable",
+  "possibly-undefined",
+  "unused-awaitable",
+  "deprecated",
+  "explicit-override",
+  "mutable-override",
+  "exhaustive-match",
+  "unimported-reveal",
+]

@@ -4,12 +4,6 @@
 //! fake Gateway can refuse (SOCKS 0x02), cut a connection after some bytes, and counts everything,
 //! so a test can prove what was — and what was not — connected.
 
-#![allow(
-    dead_code,
-    clippy::unwrap_used,
-    reason = "shared test support: each test binary uses a different part; unwrap in its helper fns is test-only"
-)]
-
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::unix::fs::{FileExt, PermissionsExt};
@@ -34,7 +28,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use vpn_domain::*;
 use vpn_ipc::identity::{GATEWAY_AUTH_METHOD, GATEWAY_MARK_SSH_PULL, gateway_proof};
-use vpn_ipc::secret::SecretBytes;
 use vpn_ipc::ssh_download::{JobSecrets, SecretChange, SshDownloadCall, SshDownloadReply};
 use vpn_ssh_download::{Gateway, Options, Publish, Route, Routes, SshDownloads};
 use vpn_store::Store;
@@ -664,6 +657,10 @@ impl FakeGateway {
                 me.accepted.fetch_add(1, Ordering::SeqCst);
                 let gw = me.clone();
                 tokio::spawn(async move {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "a client that goes away mid-handshake ends its connection with an I/O error; the tests look at what the Gateway recorded"
+                    )]
                     let _ = gw.serve(s).await;
                 });
             }
@@ -675,6 +672,10 @@ impl FakeGateway {
     pub async fn drop_all(&self) {
         let open: Vec<russh::server::Handle> = self.open.lock().drain(..).collect();
         for h in open {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a session that already ended cannot be disconnected again; ending every session is all that matters"
+            )]
             let _ = h
                 .disconnect(
                     russh::Disconnect::ByApplication,
@@ -764,6 +765,10 @@ impl FakeGateway {
         };
         if let Ok(running) = russh::server::run_stream(config, stream, conn).await {
             self.open.lock().push(running.handle());
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a session ends with an error whenever a test cuts or drops its connection"
+            )]
             let _ = running.await;
         }
         Ok(())
@@ -778,9 +783,6 @@ impl FakeGateway {
 pub enum RouteKind {
     Ready,
     Waiting,
-    /// Waiting, but the Gateway begins serving while this lookup runs (the change comes before
-    /// the job has even seen the answer).
-    ReadyDuringLookup,
 }
 
 pub struct TestRoutes {
@@ -822,13 +824,6 @@ impl Routes for TestRoutes {
                     code: "VPN_NOT_READY",
                     reason: "連線「測試」未就緒".into(),
                 },
-                RouteKind::ReadyDuringLookup => {
-                    self.set(RouteKind::Ready);
-                    Route::Waiting {
-                        code: "GATEWAY_NOT_SERVING",
-                        reason: "代理埠「測試」沒有在服務".into(),
-                    }
-                }
             }
         })
     }
@@ -889,7 +884,7 @@ pub async fn store(dir: &Path) -> (Arc<Store>, GatewayId) {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();
@@ -932,7 +927,6 @@ pub struct World {
     pub statuses: Statuses,
     pub local: PathBuf,
     pub key_file: PathBuf,
-    pub client: PrivateKey,
 }
 
 impl World {
@@ -965,7 +959,6 @@ impl World {
             routes,
             statuses: Statuses::default(),
             key_file,
-            client,
         }
     }
 
@@ -1043,13 +1036,6 @@ pub const fn keep() -> JobSecrets {
     }
 }
 
-pub fn with_password(p: &str) -> JobSecrets {
-    JobSecrets {
-        password: SecretChange::Set(SecretBytes::new(p.as_bytes().to_vec())),
-        key_passphrase: SecretChange::Keep,
-    }
-}
-
 pub async fn create(
     d: &SshDownloads,
     job: SshDownloadJob,
@@ -1111,6 +1097,50 @@ pub async fn log(d: &SshDownloads, id: SshDownloadJobId) -> Vec<SshDownloadLogEn
     {
         SshDownloadReply::Log(l) => l.items,
         _ => panic!("not a log"),
+    }
+}
+
+/// The job's finished transfers once there are at least `n`: a file is in place a moment before
+/// its record says so, so a test that saw the file waits for the record too.
+pub async fn history_of(
+    d: &SshDownloads,
+    id: SshDownloadJobId,
+    n: usize,
+) -> Vec<SshDownloadTransfer> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let records = history(d, id).await;
+        if records.len() >= n {
+            return records;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {n} finished transfers, {} so far",
+            records.len()
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// The job's log once `cond` holds for it: a file's "downloaded" line follows its record, so a
+/// test that saw the record waits for the line too.
+pub async fn log_until(
+    d: &SshDownloads,
+    id: SshDownloadJobId,
+    what: &str,
+    cond: impl Fn(&[SshDownloadLogEntry]) -> bool,
+) -> Vec<SshDownloadLogEntry> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let lines = log(d, id).await;
+        if cond(&lines) {
+            return lines;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {lines:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 

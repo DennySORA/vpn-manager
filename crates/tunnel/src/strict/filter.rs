@@ -63,6 +63,11 @@
 //! own flows (Gateway and Provider connections, DNS, port forwards) are not App traffic — a
 //! Gateway counts its payload at its relay — and neither is ICMP nor what the filter writes itself
 //! (resets, ICMP errors).
+//!
+//! The Apps' own flows are also counted per local port of the sandbox (the App socket's port,
+//! each protocol apart), so that the manager can tell which App carried them: it knows which
+//! ports each App's processes hold. A direct port's flows are its forward's (the forward counts
+//! them), and later fragments carry no port: both are only in the totals.
 
 use std::collections::HashMap;
 use std::io;
@@ -198,6 +203,8 @@ pub struct FilterStats {
 struct Carried {
     app: Option<u64>,
     forward: Option<Arc<dyn DirectUdpPolicy>>,
+    /// The App socket's local port, when the packet has a transport header.
+    port: Option<(L4, u16)>,
 }
 
 impl Carried {
@@ -205,6 +212,7 @@ impl Carried {
         Self {
             app: Some(u64::from(bytes)),
             forward: None,
+            port: None,
         }
     }
 
@@ -212,7 +220,75 @@ impl Carried {
         Self {
             app: Some(u64::from(bytes)),
             forward,
+            port: None,
         }
+    }
+
+    /// The same, on the App socket at `port` of `l4`.
+    const fn at(mut self, l4: L4, port: u16) -> Self {
+        self.port = Some((l4, port));
+        self
+    }
+}
+
+/// How long a local port keeps its counters after its last payload: long enough for every
+/// reader to see its last bytes (the worker reports about once a second).
+const PORT_IDLE: Duration = Duration::from_secs(30);
+
+/// The App payload one local port of the sandbox carried, cumulative while the entry lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortPayload {
+    pub l4: L4,
+    pub port: u16,
+    /// From the remote hosts to the App socket.
+    pub rx_bytes: u64,
+    /// From the App socket to the remote hosts.
+    pub tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PortCount {
+    rx: u64,
+    tx: u64,
+    last: Instant,
+}
+
+/// The App payload per local port. An entry goes once its port has been idle for [`PORT_IDLE`];
+/// a port used again later starts from 0.
+#[derive(Debug, Default)]
+struct PortCounts(Mutex<HashMap<(L4, u16), PortCount>>);
+
+impl PortCounts {
+    fn add(&self, key: (L4, u16), rx: u64, tx: u64, now: Instant) {
+        let mut map = self.0.lock();
+        let entry = map.entry(key).or_insert(PortCount {
+            rx: 0,
+            tx: 0,
+            last: now,
+        });
+        entry.rx = entry.rx.saturating_add(rx);
+        entry.tx = entry.tx.saturating_add(tx);
+        entry.last = now;
+        drop(map);
+    }
+
+    /// Every entry, after dropping the ones idle for [`PORT_IDLE`] (their last bytes were
+    /// reported before).
+    fn snapshot(&self, now: Instant) -> Vec<PortPayload> {
+        let mut map = self.0.lock();
+        map.retain(|_, c| now.saturating_duration_since(c.last) < PORT_IDLE);
+        let mut out: Vec<PortPayload> = map
+            .iter()
+            .map(|(&(l4, port), c)| PortPayload {
+                l4,
+                port,
+                rx_bytes: c.rx,
+                tx_bytes: c.tx,
+            })
+            .collect();
+        drop(map);
+        out.sort_by_key(|p| (p.l4 == L4::Udp, p.port));
+        out
     }
 }
 
@@ -385,6 +461,19 @@ struct Tracks {
     /// The serial of the next direct port registration.
     next_serial: u64,
     last_sweep: Option<Instant>,
+}
+
+/// Shows how many flows are tracked, not which.
+impl std::fmt::Debug for Tracks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tracks")
+            .field("udp", &self.udp.len())
+            .field("udp_unreplied", &self.udp_unreplied.len())
+            .field("tcp", &self.tcp.len())
+            .field("tcp_opening", &self.tcp_opening.len())
+            .field("fragmented", &self.fragmented.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Tracks {
@@ -748,6 +837,7 @@ fn close_direct(tracks: &Mutex<Tracks>, port: u16, serial: u64, unregister: bool
 /// They go to the App socket holding the port there (see the module docs). Until it is opened, datagrams
 /// from new remote ends are dropped and counted. Dropping it gives the port up: its flows are
 /// forgotten and its datagrams are unsolicited like any others.
+#[derive(Debug)]
 pub struct DirectUdpPort {
     tracks: Arc<Mutex<Tracks>>,
     port: u16,
@@ -789,6 +879,7 @@ impl Drop for DirectUdpPort {
 }
 
 /// A direct UDP port taking new flows (see [`DirectUdpPort::open`]).
+#[derive(Debug)]
 pub struct DirectUdpOpen {
     tracks: Arc<Mutex<Tracks>>,
     port: u16,
@@ -810,6 +901,19 @@ pub struct PacketFilter {
     /// Shared with the direct UDP ports registered through [`Self::direct_ports`].
     tracks: Arc<Mutex<Tracks>>,
     pub(crate) stats: FilterStats,
+    /// The App payload per local port.
+    ports: PortCounts,
+}
+
+/// An ICMP message of type `kind` from the peer: errors and echo replies pass while the tunnel
+/// is up, nothing else does.
+const fn inbound_icmp(p: &Parsed, up: bool, kind: u8) -> Inbound {
+    let v6 = p.is_v6();
+    if up && (packet::icmp_is_error(v6, kind) || packet::icmp_is_echo_reply(v6, kind)) {
+        Inbound::Pass
+    } else {
+        Inbound::Drop
+    }
 }
 
 fn seq_len(flags: u8, payload: u32) -> u32 {
@@ -834,6 +938,7 @@ impl PacketFilter {
             v6,
             tracks: Arc::new(Mutex::new(Tracks::new(Capacity::default()))),
             stats: FilterStats::default(),
+            ports: PortCounts::default(),
         }
     }
 
@@ -886,8 +991,11 @@ impl PacketFilter {
                 .fetch_add(raw.len() as u64, Ordering::Relaxed);
             if let Some(n) = carried.app.filter(|n| *n > 0) {
                 self.stats.app_tx_bytes.fetch_add(n, Ordering::Relaxed);
+                // A direct port's forward counts its flows itself; the ports count the Apps' own.
                 if let Some(forward) = &carried.forward {
                     forward.sent(n);
+                } else if let Some(key) = carried.port {
+                    self.ports.add(key, 0, n, now);
                 }
             }
         }
@@ -919,6 +1027,7 @@ impl PacketFilter {
                     Carried {
                         app: app.then_some(u64::from(fragment.bytes)),
                         forward,
+                        port: None,
                     },
                 ),
                 None => (self.drop_packet(), Carried::default()),
@@ -998,7 +1107,10 @@ impl PacketFilter {
                     drop(tracks);
                     return (self.refuse_full(raw, &p), Carried::default());
                 }
-                (Outbound::Pass, Carried::app(payload))
+                (
+                    Outbound::Pass,
+                    Carried::app(payload).at(L4::Tcp, id.local_port),
+                )
             }
             Transport::Udp {
                 src_port,
@@ -1054,7 +1166,10 @@ impl PacketFilter {
         // A tracked flow passes: the App's own, or a remote end's to a direct port that
         // the App answers (no destination policy for an answer, as for a relayed one).
         if let Some(forward) = tracks.udp_datagram(&id, true, now) {
-            return (Outbound::Pass, Carried::of(payload, forward));
+            return (
+                Outbound::Pass,
+                Carried::of(payload, forward).at(L4::Udp, id.local_port),
+            );
         }
         if gate != GateState::Open || !self.policy.allows(id.remote) {
             drop(tracks);
@@ -1066,7 +1181,10 @@ impl PacketFilter {
         }
         tracks.udp_unreplied.put(id, UdpTrack::app(now));
         drop(tracks);
-        (Outbound::Pass, Carried::app(payload))
+        (
+            Outbound::Pass,
+            Carried::app(payload).at(L4::Udp, id.local_port),
+        )
     }
 
     /// A datagram from the peer to `id.local_port` (`payload`: its payload bytes in this
@@ -1082,11 +1200,11 @@ impl PacketFilter {
     ) -> Option<Carried> {
         let mut tracks = self.tracks.lock();
         if let Some(forward) = tracks.udp_datagram(&id, false, now) {
-            return Some(Carried::of(payload, forward));
+            return Some(Carried::of(payload, forward).at(L4::Udp, id.local_port));
         }
         let forward = self.direct_flow(&mut tracks, id, p, gate, now)?;
         drop(tracks);
-        Some(Carried::of(payload, Some(forward)))
+        Some(Carried::of(payload, Some(forward)).at(L4::Udp, id.local_port))
     }
 
     /// Decide on an ICMP message of type `kind` the sandbox sends.
@@ -1124,6 +1242,7 @@ impl PacketFilter {
                 Some(Carried {
                     app: Some(u64::from(f.bytes)),
                     forward,
+                    port: None,
                 })
             })
             .unwrap_or_default()
@@ -1142,6 +1261,8 @@ impl PacketFilter {
                     self.stats.app_rx_bytes.fetch_add(n, Ordering::Relaxed);
                     if let Some(forward) = &carried.forward {
                         forward.received(n);
+                    } else if let Some(key) = carried.port {
+                        self.ports.add(key, n, 0, now);
                     }
                 }
             }
@@ -1204,7 +1325,10 @@ impl PacketFilter {
                 };
                 let remote_next = seq.wrapping_add(seq_len(flags, payload));
                 self.tracks.lock().remote_tcp(id, flags, remote_next, now);
-                (Inbound::Pass, Carried::app(payload))
+                (
+                    Inbound::Pass,
+                    Carried::app(payload).at(L4::Tcp, id.local_port),
+                )
             }
             Transport::Udp {
                 src_port,
@@ -1236,17 +1360,7 @@ impl PacketFilter {
                     None => return (Inbound::Drop, Carried::default()),
                 }
             }
-            Transport::Icmp { kind, .. } => {
-                let v6 = p.is_v6();
-                let verdict = if up
-                    && (packet::icmp_is_error(v6, kind) || packet::icmp_is_echo_reply(v6, kind))
-                {
-                    Inbound::Pass
-                } else {
-                    Inbound::Drop
-                };
-                (verdict, Carried::default())
-            }
+            Transport::Icmp { kind, .. } => (inbound_icmp(&p, up, kind), Carried::default()),
             Transport::Fragment if up => {
                 return (Inbound::Pass, self.later_fragment_carried(&p, now));
             }
@@ -1374,6 +1488,11 @@ impl PacketFilter {
                 .extend(packet::tcp_reset(local, id.remote, t.app_next, None));
         }
         resets
+    }
+
+    /// The App payload per local port of the sandbox, cumulative per port (see [`PortCounts`]).
+    pub(crate) fn port_payload(&self, now: Instant) -> Vec<PortPayload> {
+        self.ports.snapshot(now)
     }
 
     /// App flows currently tracked: `(tcp, udp)`.

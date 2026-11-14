@@ -9,7 +9,7 @@
 //! Partial files wait in `<folder>/.vpn-manager-partial/<id>.part` (0700, same filesystem as the
 //! folder), and a finished one is moved to its final name with a rename that never replaces an
 //! existing file: a name that is taken yields an error, never a lost file.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the libc boundary for the destination folder: openat/fstatat/mkdirat/renameat2/linkat/unlinkat/fsync on descriptors it holds"
 )]
@@ -33,7 +33,7 @@ pub(crate) fn uid() -> u32 {
 }
 
 fn cstr(s: &[u8]) -> io::Result<CString> {
-    CString::new(s).map_err(|_| {
+    CString::new(s).map_err(|_contains_nul| {
         tr!(
             "the path contains NUL",
             "路徑含有 NUL",

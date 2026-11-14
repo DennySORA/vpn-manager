@@ -1,5 +1,11 @@
+# The crates are not published: the API-shape lints reach public items too.
+avoid-breaking-exported-api = false
+# Test code may unwrap, expect, panic, print and dbg; product code may not.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+allow-dbg-in-tests = true
 
 # `clippy::multiple_crate_versions` (cargo group): these duplicates come from pinned third-party
 # stacks the workspace cannot unify — GotaTun `=0.10.3` (ADR-0001: RustCrypto 0.10 generation,

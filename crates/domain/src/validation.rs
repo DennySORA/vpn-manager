@@ -1170,11 +1170,18 @@ pub fn app_path_ok(p: &str) -> bool {
 fn unknown_placeholders(arg: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut rest = arg;
+    // `{` and `}` are one byte each, so the splits next to them are always character boundaries.
     while let Some(open) = rest.find('{') {
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('}') else { break };
-        let name = &after[..close];
-        let token = &rest[open..open + close + 2];
+        let Some((_, from_open)) = rest.split_at_checked(open) else {
+            break;
+        };
+        let Some(close) = from_open.find('}') else {
+            break;
+        };
+        let Some((token, after)) = from_open.split_at_checked(close + 1) else {
+            break;
+        };
+        let name = token.trim_prefix('{').trim_suffix('}');
         if !name.is_empty()
             && name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
             && token != APP_PLACEHOLDER_GATEWAY_PORT
@@ -1182,7 +1189,7 @@ fn unknown_placeholders(arg: &str) -> Vec<&str> {
         {
             out.push(token);
         }
-        rest = &after[close + 1..];
+        rest = after;
     }
     out
 }

@@ -42,8 +42,6 @@ export const m = defineMessages({
     labelAndDetail: (label: string, detail: string) => `${label}: ${detail}`,
     /** When the executable was approved, and its size. */
     approvedAt: (when: string, size: string) => `Approved ${when} · ${size}`,
-    /** The Apps of one sandbox in a few words: the first one's name and how many there are (more than one). */
-    sandboxApps: (first: string, count: number) => `${first} and ${count - 1} more`,
     /** Why a failed App failed, as its state. */
     state: {
       exited: "Exited abnormally",
@@ -318,7 +316,6 @@ export const m = defineMessages({
     list: (parts) => parts.join("、"),
     labelAndDetail: (label, detail) => `${label}：${detail}`,
     approvedAt: (when, size) => `${when} 核准 · ${size}`,
-    sandboxApps: (first, count) => `${first} 等 ${count} 個 App`,
     state: {
       exited: "異常結束",
       outOfMemory: "記憶體超過上限",
@@ -555,7 +552,6 @@ export const m = defineMessages({
     list: (parts) => parts.join("、"),
     labelAndDetail: (label, detail) => `${label}：${detail}`,
     approvedAt: (when, size) => `${when} に承認 · ${size}`,
-    sandboxApps: (first, count) => `${first} など ${count} 件のアプリ`,
     state: {
       exited: "異常終了",
       outOfMemory: "メモリ上限を超過",

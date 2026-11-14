@@ -27,7 +27,7 @@
 //! even when its connection went away — it adopts the sandbox again through the rendezvous
 //! socket. Only once no manager connection is left and that process has exited does the orphan
 //! grace run.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the sandbox holder: unshare, fork/execve, signals, sockets and fd handling via libc"
 )]
@@ -230,7 +230,7 @@ fn sockaddr_un(path: &Path) -> io::Result<(libc::sockaddr_un, libc::socklen_t)> 
             *dst = *src as libc::c_char;
         }
     }
-    let len = std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1;
+    let len = size_of::<libc::sa_family_t>() + bytes.len() + 1;
     #[expect(
         clippy::cast_possible_truncation,
         reason = "bounded by sun_path's length (108) above"
@@ -278,7 +278,12 @@ impl Rendezvous {
         })?;
         // SAFETY: a fresh descriptor we own.
         let dir = unsafe { OwnedFd::from_raw_fd(dir) };
-        let _ = std::fs::remove_file(path);
+        // A stale socket file is replaced (binding over one that stays fails below).
+        if let Err(e) = std::fs::remove_file(path)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            tracing::debug!(error = %e, "stale rendezvous socket not removed");
+        }
         let listener = seqpacket_socket()?;
         let (addr, len) = sockaddr_un(path)?;
         // SAFETY: bind/listen with a valid sockaddr_un of the given length.
@@ -308,20 +313,21 @@ impl Rendezvous {
 
     /// Remove the socket file, if it is still the one this holder created.
     fn remove(&self) {
-        // SAFETY: fstatat/unlinkat relative to a directory descriptor we own, with a valid C
-        // string and a pointer to a local stat buffer.
-        unsafe {
-            let mut st: libc::stat = std::mem::zeroed();
-            if libc::fstatat(
+        // SAFETY: an all-zero stat is a valid buffer for fstatat to fill.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: fstatat relative to a directory descriptor we own, with a valid C string and a
+        // pointer to the local stat buffer.
+        let found = unsafe {
+            libc::fstatat(
                 self.dir.as_raw_fd(),
                 self.name.as_ptr(),
                 &raw mut st,
                 libc::AT_SYMLINK_NOFOLLOW,
-            ) == 0
-                && (st.st_dev, st.st_ino) == self.inode
-            {
-                libc::unlinkat(self.dir.as_raw_fd(), self.name.as_ptr(), 0);
-            }
+            )
+        } == 0;
+        if found && (st.st_dev, st.st_ino) == self.inode {
+            // SAFETY: unlinkat relative to a directory descriptor we own, with a valid C string.
+            unsafe { libc::unlinkat(self.dir.as_raw_fd(), self.name.as_ptr(), 0) };
         }
     }
 }
@@ -387,21 +393,20 @@ fn close_all_except(keep: &[RawFd]) {
 
 /// Block the signals the process handles through a signalfd and return that descriptor.
 pub fn signal_fd(signals: &[libc::c_int]) -> io::Result<OwnedFd> {
-    // SAFETY: sigset manipulation on a local; sigprocmask and signalfd with valid pointers.
-    unsafe {
-        let mut set: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&raw mut set);
-        for s in signals {
-            libc::sigaddset(&raw mut set, *s);
-        }
-        check(libc::sigprocmask(
-            libc::SIG_BLOCK,
-            &raw const set,
-            std::ptr::null_mut(),
-        ))?;
-        let fd = check(libc::signalfd(-1, &raw const set, libc::SFD_CLOEXEC))?;
-        Ok(OwnedFd::from_raw_fd(fd))
+    // SAFETY: an all-zero sigset_t is a valid value for sigemptyset to initialize.
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: sigemptyset initializes the local set.
+    unsafe { libc::sigemptyset(&raw mut set) };
+    for s in signals {
+        // SAFETY: sigaddset on the initialized local set.
+        unsafe { libc::sigaddset(&raw mut set, *s) };
     }
+    // SAFETY: sigprocmask with a pointer to the local set and no buffer for the old one.
+    check(unsafe { libc::sigprocmask(libc::SIG_BLOCK, &raw const set, std::ptr::null_mut()) })?;
+    // SAFETY: signalfd making a new descriptor (-1) for the local set.
+    let fd = check(unsafe { libc::signalfd(-1, &raw const set, libc::SFD_CLOEXEC) })?;
+    // SAFETY: a fresh descriptor we own.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 /// Read pending signals from a signalfd (non-blocking after poll said readable).
@@ -414,20 +419,21 @@ pub struct Signal {
 
 pub fn read_signals(fd: RawFd) -> Vec<Signal> {
     let mut out = Vec::new();
-    // SAFETY: zeroed siginfo is valid; read at most its size.
-    unsafe {
-        let mut info: libc::signalfd_siginfo = std::mem::zeroed();
-        let n = libc::read(
+    // SAFETY: an all-zero signalfd_siginfo is a valid value.
+    let mut info: libc::signalfd_siginfo = unsafe { std::mem::zeroed() };
+    // SAFETY: read at most the size of the local `info` into it.
+    let n = unsafe {
+        libc::read(
             fd,
             (&raw mut info).cast(),
-            std::mem::size_of::<libc::signalfd_siginfo>(),
-        );
-        if n == std::mem::size_of::<libc::signalfd_siginfo>().cast_signed() {
-            out.push(Signal {
-                number: info.ssi_signo,
-                from_outside: info.ssi_pid == 0,
-            });
-        }
+            size_of::<libc::signalfd_siginfo>(),
+        )
+    };
+    if n == size_of::<libc::signalfd_siginfo>().cast_signed() {
+        out.push(Signal {
+            number: info.ssi_signo,
+            from_outside: info.ssi_pid == 0,
+        });
     }
     out
 }
@@ -438,20 +444,21 @@ pub fn bound_sends(fd: RawFd) {
         tv_sec: 2,
         tv_usec: 0,
     };
-    // SAFETY: setsockopt with a pointer to a live timeval of the size we pass.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "size_of::<timeval>() is 16, which socklen_t holds"
     )]
+    let len = size_of::<libc::timeval>() as libc::socklen_t;
+    // SAFETY: setsockopt with a pointer to a live timeval of the size we pass.
     unsafe {
         libc::setsockopt(
             fd,
             libc::SOL_SOCKET,
             libc::SO_SNDTIMEO,
             (&raw const tv).cast(),
-            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
-        );
-    }
+            len,
+        )
+    };
 }
 
 /// Entry point of `vpnd sandbox-holder`. Must run before any thread exists.
@@ -465,23 +472,30 @@ pub fn run_holder() -> i32 {
         Ok(Some((Request::Setup(c), fds, _))) => (*c, fds.into_iter().next()),
         _ => return 2,
     };
-    let fail = |stage: &str, e: &io::Error| -> i32 {
-        let _ = wire::send_json(
-            ctl,
-            &Reply::Failed {
-                stage: stage.into(),
-                errno: errno_of(e),
-                message: e.to_string(),
-            },
-            &[],
-        );
-        1
-    };
+    let fail = |stage: &str, e: &io::Error| -> i32 { set_up_failed(ctl, stage, e) };
     match build(&config) {
         Ok(Built::Exit) => 0,
         Ok(Built::Holder(parts)) => holder(config, control, *parts, manager),
         Err((stage, e)) => fail(stage, &e),
     }
+}
+
+/// Tell the manager on `ctl` why the sandbox could not be built; the holder's exit code.
+fn set_up_failed(ctl: RawFd, stage: &str, e: &io::Error) -> i32 {
+    let reply = Reply::Failed {
+        stage: stage.into(),
+        errno: errno_of(e),
+        message: e.to_string(),
+    };
+    if let Err(unsent) = wire::send_json(ctl, &reply, &[]) {
+        tracing::warn!(
+            stage,
+            error = %e,
+            %unsent,
+            "sandbox set-up failed and the manager was not told why"
+        );
+    }
+    1
 }
 
 struct Parts {
@@ -515,8 +529,10 @@ type Stage = (&'static str, io::Error);
 
 fn build(config: &HolderConfig) -> Result<Built, Stage> {
     let at = |stage: &'static str| move |e: io::Error| (stage, e);
-    // SAFETY: getuid/getgid have no preconditions.
-    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    // SAFETY: getgid has no preconditions.
+    let gid = unsafe { libc::getgid() };
     let boot_id = boot_id().map_err(at("boot_id"))?;
     let rendezvous = match &config.rendezvous {
         Some(path) => Some(Rendezvous::listen(path).map_err(at("rendezvous"))?),
@@ -542,7 +558,9 @@ fn build(config: &HolderConfig) -> Result<Built, Stage> {
     if v6.is_none() {
         // Without IPv6 on the device nothing IPv6 can leave through it. A kernel without IPv6
         // has no such switch, and needs none.
-        let _ = net::disable_ipv6(&config.tun_name);
+        if let Err(e) = net::disable_ipv6(&config.tun_name) {
+            tracing::debug!(error = %e, "IPv6 not switched off on the tunnel device");
+        }
     }
     nl.link_up(index, Some(u32::from(config.mtu)))
         .map_err(at("tun_up"))?;
@@ -563,8 +581,9 @@ fn build(config: &HolderConfig) -> Result<Built, Stage> {
 
     mounts::setup(config.xdg_runtime_dir.as_deref(), &config.hide).map_err(at("mounts"))?;
 
-    // SAFETY: unshare/fork in a single-threaded process.
+    // SAFETY: unshare with a constant flag in a single-threaded process.
     check(unsafe { libc::unshare(libc::CLONE_NEWPID) }).map_err(at("pidns"))?;
+    // SAFETY: fork in a single-threaded process.
     match check(unsafe { libc::fork() }).map_err(at("fork"))? {
         0 => Ok(Built::Holder(Box::new(Parts {
             tun,
@@ -633,18 +652,7 @@ fn holder(
     manager: Option<OwnedFd>,
 ) -> i32 {
     let ctl = control.as_raw_fd();
-    let fail = |stage: &str, e: &io::Error| -> i32 {
-        let _ = wire::send_json(
-            ctl,
-            &Reply::Failed {
-                stage: stage.into(),
-                errno: errno_of(e),
-                message: e.to_string(),
-            },
-            &[],
-        );
-        1
-    };
+    let fail = |stage: &str, e: &io::Error| -> i32 { set_up_failed(ctl, stage, e) };
     if let Err(e) = mounts::private_proc() {
         return fail("proc", &e);
     }
@@ -655,10 +663,9 @@ fn holder(
     }
     // Apps run with our uid; a non-dumpable process cannot be ptraced by them.
     // SAFETY: prctl with constant arguments.
-    unsafe {
-        libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
-        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
-    }
+    unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    // SAFETY: ignoring SIGPIPE, with constant arguments.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
     let sigfd = match signal_fd(&[
         libc::SIGCHLD,
         libc::SIGTERM,
@@ -852,7 +859,7 @@ impl State {
             clippy::cast_possible_truncation,
             reason = "size_of::<ucred>() is 12, which socklen_t holds"
         )]
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
         // SAFETY: getsockopt with a pointer to a live ucred and its size.
         let ok = unsafe {
             libc::getsockopt(
@@ -988,7 +995,7 @@ impl State {
         }
         let cwd = match &req.cwd {
             Some(p) => CString::new(p.as_os_str().as_bytes())
-                .map_err(|_| "NUL in working directory".to_owned())?,
+                .map_err(|_nul| "NUL in working directory".to_owned())?,
             None => CString::from(c"/"),
         };
         let launch = Launch::new(&req.argv, &req.env, cwd, req.umask, self.cap_last)?;
@@ -1030,8 +1037,9 @@ impl Launch {
         if !program.starts_with('/') {
             return Err("the program must be an absolute path".into());
         }
+        // The error would carry the argument or variable itself, which may be a secret.
         let cstr =
-            |s: &str| CString::new(s).map_err(|_| "NUL in command or environment".to_owned());
+            |s: &str| CString::new(s).map_err(|_nul| "NUL in command or environment".to_owned());
         let path = cstr(program)?;
         let argv: Vec<CString> = argv.iter().map(|a| cstr(a)).collect::<Result<_, _>>()?;
         let envp: Vec<CString> = env
@@ -1104,6 +1112,16 @@ pub fn start_tree(
     Ok(pid as libc::pid_t)
 }
 
+/// Report on `rep`, from an App tree's init or the App. Best effort: a reader that is gone or
+/// stopped reading only misses the report, and the tree goes on the same way.
+fn tell(rep: RawFd, report: &Report) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a report nobody reads changes nothing for the tree, which goes on the same way"
+    )]
+    let _ = wire::send_json(rep, report, &[]);
+}
+
 /// The App tree's init (pid 1 of its own pid namespace): starts the App, forwards termination
 /// signals to every process of the tree, reaps, reports the App's exit and leaves when the
 /// tree is empty (its leaving kills whatever might remain). It holds no capability and cannot
@@ -1114,7 +1132,7 @@ pub fn start_tree(
 )]
 fn app_init(report: OwnedFd, stdio: [Option<OwnedFd>; 3], launch: &Launch, tree: TreeInit) -> ! {
     let mut keep = vec![report.as_raw_fd()];
-    keep.extend(stdio.iter().flatten().map(std::os::fd::AsRawFd::as_raw_fd));
+    keep.extend(stdio.iter().flatten().map(AsRawFd::as_raw_fd));
     // The App's Landlock ruleset, for it to restrict itself with (close-on-exec).
     keep.extend(launch.landlock.as_ref().map(AsRawFd::as_raw_fd));
     close_all_except(&keep);
@@ -1129,10 +1147,10 @@ fn app_init(report: OwnedFd, stdio: [Option<OwnedFd>; 3], launch: &Launch, tree:
         // SAFETY: _exit is always safe.
         unsafe { libc::_exit(126) }
     };
-    let _ = wire::send_json(rep, &Report::Init, &[]);
+    tell(rep, &Report::Init);
     let refuse = |e: io::Error| -> ! {
         let errno = e.raw_os_error().unwrap_or(libc::EIO);
-        let _ = wire::send_json(rep, &Report::Exec { errno }, &[]);
+        tell(rep, &Report::Exec { errno });
         // SAFETY: _exit is always safe.
         unsafe { libc::_exit(127) }
     };
@@ -1149,7 +1167,7 @@ fn app_init(report: OwnedFd, stdio: [Option<OwnedFd>; 3], launch: &Launch, tree:
         refuse(e);
     }
     let (app, errno) = fork_app(rep, stdio, launch);
-    let _ = wire::send_json(rep, &Report::Exec { errno }, &[]);
+    tell(rep, &Report::Exec { errno });
     let mut app_code: Option<i32> = None;
     // `end_with_app`: when the rest of the tree gets SIGKILL.
     let mut kill_at: Option<Instant> = None;
@@ -1197,21 +1215,21 @@ fn fork_app(rep: RawFd, stdio: [Option<OwnedFd>; 3], launch: &Launch) -> (libc::
     let mut pipe = [0; 2];
     // SAFETY: pipe2 writes two descriptors into the array.
     if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
-        let _ = wire::send_json(
+        tell(
             rep,
             &Report::Exec {
                 errno: io::Error::last_os_error()
                     .raw_os_error()
                     .unwrap_or(libc::EIO),
             },
-            &[],
         );
         // SAFETY: _exit is always safe.
         unsafe { libc::_exit(127) };
     }
-    // SAFETY: fresh descriptors we own.
-    let (exec_r, exec_w) =
-        unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
+    // SAFETY: pipe2 succeeded: a fresh descriptor we own.
+    let exec_r = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
+    // SAFETY: the same for the write end.
+    let exec_w = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
     // SAFETY: fork in this single-threaded process.
     let app = unsafe { libc::fork() };
     if app == 0 {
@@ -1264,7 +1282,7 @@ fn reap_tree(
                 (None, None)
             };
             *app_code = Some(code.unwrap_or_else(|| 128 + signal.unwrap_or(0)));
-            let _ = wire::send_json(rep, &Report::Exited { code, signal }, &[]);
+            tell(rep, &Report::Exited { code, signal });
             if tree.end_with_app {
                 // SAFETY: kill(-1) from this namespace's init reaches the rest of
                 // the tree.
@@ -1282,26 +1300,27 @@ fn reap_tree(
 fn app_exec(report: RawFd, exec_w: RawFd, stdio: &[Option<OwnedFd>; 3], launch: &Launch) -> ! {
     let fail = |errno: i32| -> ! {
         let bytes = errno.to_ne_bytes();
-        // SAFETY: write a local buffer, then leave without running any destructor.
-        unsafe {
-            libc::write(exec_w, bytes.as_ptr().cast(), 4);
-            libc::_exit(127)
-        }
+        // SAFETY: write a local buffer of 4 bytes to the exec pipe.
+        unsafe { libc::write(exec_w, bytes.as_ptr().cast(), 4) };
+        // SAFETY: leave without running any destructor; _exit is always safe.
+        unsafe { libc::_exit(127) }
     };
     let last_errno = || {
         io::Error::last_os_error()
             .raw_os_error()
             .unwrap_or(libc::EIO)
     };
-    // SAFETY: plain system calls on our own process state.
-    unsafe {
-        let mut set: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&raw mut set);
-        libc::sigprocmask(libc::SIG_SETMASK, &raw const set, std::ptr::null_mut());
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-        libc::setsid();
-    }
-    let _ = wire::send_json(report, &Report::App, &[]);
+    // SAFETY: an all-zero sigset_t is a valid value for sigemptyset to initialize.
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: sigemptyset initializes the local set.
+    unsafe { libc::sigemptyset(&raw mut set) };
+    // SAFETY: sigprocmask with a pointer to the local (empty) set: no signal stays blocked.
+    unsafe { libc::sigprocmask(libc::SIG_SETMASK, &raw const set, std::ptr::null_mut()) };
+    // SAFETY: SIGPIPE's default disposition back, with constant arguments.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    // SAFETY: setsid on this process has no preconditions.
+    unsafe { libc::setsid() };
+    tell(report, &Report::App);
     for (target, source) in stdio.iter().enumerate() {
         let fd = source.as_ref().map_or_else(
             || {
@@ -1319,12 +1338,11 @@ fn app_exec(report: RawFd, exec_w: RawFd, stdio: &[Option<OwnedFd>; 3], launch: 
             fail(last_errno());
         }
     }
-    // SAFETY: umask/chdir with a valid C string.
-    unsafe {
-        libc::umask(launch.umask as libc::mode_t);
-        if libc::chdir(launch.cwd.as_ptr()) < 0 {
-            fail(last_errno());
-        }
+    // SAFETY: umask has no preconditions.
+    unsafe { libc::umask(launch.umask as libc::mode_t) };
+    // SAFETY: chdir with a valid C string.
+    if unsafe { libc::chdir(launch.cwd.as_ptr()) } < 0 {
+        fail(last_errno());
     }
     if let Err(e) = caps::drop_all(launch.cap_last) {
         fail(e.raw_os_error().unwrap_or(libc::EPERM));
@@ -1339,17 +1357,17 @@ fn app_exec(report: RawFd, exec_w: RawFd, stdio: &[Option<OwnedFd>; 3], launch: 
     argv.push(std::ptr::null());
     let mut envp: Vec<*const libc::c_char> = launch.envp.iter().map(|e| e.as_ptr()).collect();
     envp.push(std::ptr::null());
-    // SAFETY: mark every inherited descriptor above stdio close-on-exec, then exec with
-    // null-terminated arrays of valid C strings.
+    // SAFETY: marks every inherited descriptor above stdio close-on-exec (constant arguments).
     unsafe {
         libc::syscall(
             libc::SYS_close_range,
             3u32,
             u32::MAX,
             libc::CLOSE_RANGE_CLOEXEC,
-        );
-        libc::execve(launch.path.as_ptr(), argv.as_ptr(), envp.as_ptr());
-    }
+        )
+    };
+    // SAFETY: exec with null-terminated arrays of valid C strings, alive across the call.
+    unsafe { libc::execve(launch.path.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
     fail(last_errno())
 }
 

@@ -20,6 +20,7 @@ use vpn_store::{Store, StoreError};
 /// The current text of a hand-modified file is shown up to this size.
 const SHOW_MAX: usize = 64 * 1024;
 
+#[derive(Debug)]
 pub struct SshProjector {
     dir: SshDir,
     display: String,
@@ -37,6 +38,7 @@ fn path_safe(s: &str) -> bool {
 }
 
 /// `~/.ssh/config` as the SSH Manager sees it.
+#[derive(Debug)]
 pub struct UserView {
     pub config: UserConfig,
     pub include: SshIncludeState,
@@ -319,8 +321,11 @@ impl SshProjector {
                     .map_err(|e| ApiError::new(ErrorCode::InvalidState, e))?
             }
         };
-        // A missing vpn-manager.conf is created; a modified one is left alone (reported).
-        let _ = self.apply(store).await;
+        // A missing vpn-manager.conf is created; a modified one is left alone (reported in the
+        // status, which `apply` keeps).
+        if let Err(why) = self.apply(store).await {
+            tracing::debug!(reason = %why.en, "vpn-manager.conf not written after the Include line");
+        }
         Ok(backup)
     }
 

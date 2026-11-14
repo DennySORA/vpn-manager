@@ -4,7 +4,7 @@
 //! unresolved (resolved inside the tunnel). Any refusal is an error with a user-facing reason:
 //! callers fail instead of falling back to a direct connection.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "getuid for the ownership check of the Gateway key file"
 )]
@@ -281,7 +281,7 @@ pub async fn connect(
         }
         Err(_) => {
             let name = host.as_bytes();
-            let len = u8::try_from(name.len()).map_err(|_| SocksError::NameTooLong)?;
+            let len = u8::try_from(name.len()).map_err(|_too_long| SocksError::NameTooLong)?;
             req.push(0x03);
             req.push(len);
             req.extend_from_slice(name);

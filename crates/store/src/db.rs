@@ -23,7 +23,7 @@ type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
 /// Called (on the writer's connection) when a write found the disk full; true when it made room
 /// (the write runs once more).
-pub type OnFull = std::sync::Arc<dyn Fn(&mut Connection) -> bool + Send + Sync>;
+pub type OnFull = Arc<dyn Fn(&mut Connection) -> bool + Send + Sync>;
 
 /// Durability profile of a database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,14 +47,25 @@ pub struct Db {
     on_full: Option<OnFull>,
 }
 
+/// Shows the counters; the queues, threads and pool are internal.
+impl std::fmt::Debug for Db {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Db")
+            .field("busy_refusals", &self.busy_refusals)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for Db {
     /// Close the write lanes and wait until the writer finished its queue and checkpoint, so a
     /// reopen (or process exit) never races a half-closed writer.
     fn drop(&mut self) {
         self.normal.take();
         self.priority.take();
-        if let Some(handle) = self.writer.take() {
-            let _ = handle.join();
+        if let Some(handle) = self.writer.take()
+            && handle.join().is_err()
+        {
+            tracing::error!("the store writer thread panicked");
         }
     }
 }
@@ -105,8 +116,13 @@ fn contained<T>(
     if conn.is_autocommit() {
         return result;
     }
-    let _ = conn.execute_batch("ROLLBACK");
-    tracing::error!("a store job left its transaction open: rolled back");
+    match conn.execute_batch("ROLLBACK") {
+        Ok(()) => tracing::error!("a store job left its transaction open: rolled back"),
+        Err(e) => tracing::error!(
+            error = %e,
+            "a store job left its transaction open, and rolling it back failed"
+        ),
+    }
     match result {
         Ok(_) => Err(StoreError::Aborted("the job left its transaction open")),
         failed => failed,
@@ -228,7 +244,9 @@ impl Db {
                 }
                 result
             });
-            let _ = tx.send(result);
+            if tx.send(result).is_err() {
+                tracing::trace!("a store write finished after its caller stopped waiting");
+            }
         });
         if fail_fast {
             match lane.try_send(job) {
@@ -243,10 +261,10 @@ impl Db {
             let lane = lane.clone();
             tokio::task::spawn_blocking(move || lane.send(job))
                 .await
-                .map_err(|_| StoreError::Closed)?
-                .map_err(|_| StoreError::Closed)?;
+                .map_err(|e| task_ended(&e))?
+                .map_err(|_disconnected| StoreError::Closed)?;
         }
-        rx.await.map_err(|_| StoreError::Closed)?
+        rx.await.map_err(|_job_dropped| StoreError::Closed)?
     }
 
     /// Run a read-only closure on a pooled connection (blocking thread).
@@ -259,7 +277,7 @@ impl Db {
             .clone()
             .acquire_owned()
             .await
-            .map_err(|_| StoreError::Closed)?;
+            .map_err(|_closed| StoreError::Closed)?;
         let pool = self.readers.clone();
         tokio::task::spawn_blocking(move || {
             let mut conn = pool.take();
@@ -271,8 +289,15 @@ impl Db {
             result
         })
         .await
-        .map_err(|_| StoreError::Closed)?
+        .map_err(|e| task_ended(&e))?
     }
+}
+
+/// A blocking task of the store ended without its result: the runtime shut down before it ran,
+/// or it panicked. To its caller the store is closed.
+fn task_ended(e: &tokio::task::JoinError) -> StoreError {
+    tracing::debug!(error = %e, "a store task ended without its result");
+    StoreError::Closed
 }
 
 #[expect(
@@ -296,7 +321,9 @@ fn writer_loop(mut conn: Connection, normal: Receiver<Job>, priority: Receiver<J
             },
         }
     }
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        tracing::warn!(error = %e, "the store's closing WAL checkpoint failed");
+    }
 }
 
 /// Minimal blocking pool: the semaphore guarantees a connection is available when `take` runs.
@@ -311,6 +338,10 @@ mod parking {
             Self(Mutex::new(v))
         }
 
+        #[expect(
+            clippy::expect_used,
+            reason = "the read permits match the pooled connections one to one, and a reader gives its connection back before its permit"
+        )]
         pub fn take(&self) -> Connection {
             self.0
                 .lock()

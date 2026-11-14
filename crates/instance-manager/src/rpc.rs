@@ -52,7 +52,7 @@ pub(crate) mod hooks {
 
 /// Static facts the manager reports in `System`, and the optional SSH Manager and Performance
 /// Manager.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SystemFacts {
     pub capabilities: Vec<Capability>,
     pub ssh: Option<Arc<SshProjector>>,
@@ -181,7 +181,11 @@ async fn connection(
     // The client stopped sending (or broke the protocol): replies already on their way get a
     // moment, then the connection closes as a whole.
     drop(out_tx);
-    let _ = tokio::time::timeout(REPLY_FLUSH, &mut writing).await;
+    match tokio::time::timeout(REPLY_FLUSH, &mut writing).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::debug!(error = %e, "replies on their way not written"),
+        Err(_elapsed) => tracing::debug!("replies on their way not written in time"),
+    }
     read
 }
 
@@ -219,7 +223,10 @@ async fn read_calls(
                 );
                 tokio::spawn(async move {
                     let result = dispatch(call, &m, &s, &f).await;
-                    let _ = out.send(ServerMsg::Reply { id, result }).await;
+                    // The connection may have closed meanwhile: then the reply has no reader.
+                    if out.send(ServerMsg::Reply { id, result }).await.is_err() {
+                        tracing::trace!("reply dropped: its control connection closed");
+                    }
                 });
             }
             ClientMsg::Subscribe => {
@@ -781,8 +788,9 @@ async fn update_call(
     Ok(Reply::Entity(Box::new(updated)))
 }
 
-/// An entity id in a call that does not parse.
-fn invalid_id() -> ApiError {
+/// An entity id in a call that does not parse (`why`, from the parser, goes to the log).
+fn invalid_id(why: &dyn std::fmt::Display) -> ApiError {
+    tracing::debug!(error = %why, "invalid entity id in a call");
     ApiError::new(
         ErrorCode::InvalidRequest,
         tr!("Invalid id", "id 無效", "id が無効です"),
@@ -820,7 +828,7 @@ async fn delete_call(
                 EntityKind::Security => store.delete::<SecurityProfile>(id, r).await,
                 EntityKind::Transport => store.delete::<TransportProfile>(id, r).await,
                 EntityKind::Instance => {
-                    let iid: InstanceId = id.parse().map_err(|_| invalid_id())?;
+                    let iid: InstanceId = id.parse().map_err(|e| invalid_id(&e))?;
                     let status = manager.status(iid).await?;
                     if !matches!(status.phase, Phase::Stopped | Phase::Failed) {
                         return Err(instance_running());
@@ -842,12 +850,12 @@ async fn delete_call(
                     res
                 }
                 EntityKind::App => {
-                    let app: AppId = id.parse().map_err(|_| invalid_id())?;
+                    let app: AppId = id.parse().map_err(|e| invalid_id(&e))?;
                     manager.apps().delete(app, r).await?;
                     Ok(())
                 }
                 EntityKind::Forward => {
-                    let fid: ForwardBindingId = id.parse().map_err(|_| invalid_id())?;
+                    let fid: ForwardBindingId = id.parse().map_err(|e| invalid_id(&e))?;
                     let f: Option<ForwardBinding> = store.get(id).await.map_err(api)?;
                     let res = store.delete_forward(fid, r).await;
                     if res.is_ok()

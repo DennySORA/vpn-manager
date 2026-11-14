@@ -26,9 +26,9 @@ pub fn substitute(arg: &str, gateway_port: Option<u16>, home: &str) -> String {
     let port = gateway_port.map(|p| p.to_string());
     let mut out = String::with_capacity(arg.len() + home.len());
     let mut rest = arg;
-    while let Some(i) = rest.find('{') {
-        out.push_str(&rest[..i]);
-        let tail = &rest[i..];
+    // `tail` starts at the next `{` (a char boundary: `find` returns one).
+    while let Some((before, tail)) = rest.find('{').and_then(|i| rest.split_at_checked(i)) {
+        out.push_str(before);
         if let (Some(p), Some(after)) = (
             port.as_deref(),
             tail.strip_prefix(APP_PLACEHOLDER_GATEWAY_PORT),
@@ -40,7 +40,7 @@ pub fn substitute(arg: &str, gateway_port: Option<u16>, home: &str) -> String {
             rest = after;
         } else {
             out.push('{');
-            rest = &tail[1..];
+            rest = tail.strip_prefix('{').unwrap_or_default();
         }
     }
     out.push_str(rest);

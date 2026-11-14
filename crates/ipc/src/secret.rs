@@ -42,6 +42,10 @@ impl Serialize for SecretBytes {
 }
 
 impl<'de> Deserialize<'de> for SecretBytes {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a base64 error names an offending byte of the secret's encoding and its offset; the error must carry nothing of the secret"
+    )]
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         use base64::Engine as _;
         let encoded = Zeroizing::new(String::deserialize(d)?);

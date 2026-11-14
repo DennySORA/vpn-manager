@@ -1,7 +1,7 @@
 //! One strict tunnel: `GotaTun` between the sandbox's TUN device and a pinned underlay socket
 //! created in the host network namespace, plus the kernel connector for the worker's own flows.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "interface enumeration of the sandbox namespace through libc if_nameindex"
 )]
@@ -49,6 +49,16 @@ pub struct StrictTunnelConfig {
     pub policy: Arc<dyn DestinationCheck>,
 }
 
+impl std::fmt::Debug for StrictTunnelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StrictTunnelConfig")
+            .field("peer", &self.peer)
+            .field("addresses", &self.addresses)
+            .field("mtu", &self.mtu)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The parts the gate and resets act on.
 struct Plane {
     gate: Arc<Gate>,
@@ -65,6 +75,13 @@ impl Plane {
             self.reset_flows(None);
         }
         in_force
+    }
+
+    /// [`Self::set_gate`] with [`GateState::Sealed`], which always takes effect (a sealed gate
+    /// stays sealed): every flow is reset.
+    fn seal(&self) {
+        self.gate.set(GateState::Sealed);
+        self.reset_flows(None);
     }
 
     fn reset_flows(&self, class: Option<FlowClass>) {
@@ -89,7 +106,11 @@ impl Plane {
 
     fn send_resets(&self, to_apps: Vec<Vec<u8>>, to_remotes: Vec<Vec<u8>>) {
         for packet in to_apps {
-            let _ = self.tun.write(&packet);
+            // Best effort, like every write into the device: a reset it cannot take is lost
+            // and the App's connection ends by its own timeout instead.
+            if let Err(e) = self.tun.write(&packet) {
+                tracing::trace!(error = %e, "reset not written to the TUN device");
+            }
         }
         for packet in to_remotes {
             self.inject.push(&packet);
@@ -105,32 +126,45 @@ pub struct StrictTunnel {
     underlay_stats: Arc<UnderlayStats>,
 }
 
+impl std::fmt::Debug for StrictTunnel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StrictTunnel").finish_non_exhaustive()
+    }
+}
+
 /// Names of the network interfaces of this process's network namespace.
 ///
 /// # Errors
 ///
 /// Fails with the OS error when the interfaces cannot be listed.
 pub fn interfaces() -> io::Result<Vec<String>> {
-    // SAFETY: if_nameindex returns a heap array terminated by a zero entry (or null on
-    // failure); we only read it and hand it back to if_freenameindex.
-    unsafe {
-        let list = libc::if_nameindex();
-        if list.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let mut names = Vec::new();
-        let mut entry = list;
-        while (*entry).if_index != 0 && !(*entry).if_name.is_null() {
-            names.push(
-                std::ffi::CStr::from_ptr((*entry).if_name)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-            entry = entry.add(1);
-        }
-        libc::if_freenameindex(list);
-        Ok(names)
+    // SAFETY: if_nameindex takes no arguments; it returns a heap array terminated by a zero
+    // entry, or null on failure.
+    let list = unsafe { libc::if_nameindex() };
+    if list.is_null() {
+        return Err(io::Error::last_os_error());
     }
+    let mut names = Vec::new();
+    let mut entry = list;
+    loop {
+        // SAFETY: `entry` points at an element of the array, at most its terminating entry
+        // (the loop stops there), and the array stays allocated until if_freenameindex below;
+        // we only read it.
+        let current = unsafe { &*entry };
+        if current.if_index == 0 || current.if_name.is_null() {
+            break;
+        }
+        // SAFETY: the name of a listed interface is a NUL-terminated string inside the array,
+        // copied into an owned `String` before the array is freed.
+        let name = unsafe { std::ffi::CStr::from_ptr(current.if_name) };
+        names.push(name.to_string_lossy().into_owned());
+        // SAFETY: `entry` is not the terminating entry, so the next element is in the array.
+        entry = unsafe { entry.add(1) };
+    }
+    // SAFETY: `list` came from if_nameindex and is handed back once; nothing points into it
+    // any more.
+    unsafe { libc::if_freenameindex(list) };
+    Ok(names)
 }
 
 /// The proof that kernel sockets of this process cannot reach anything but the tunnel: its
@@ -253,9 +287,7 @@ impl StrictTunnel {
             .await?;
         // On a fatal device error the data path seals itself, like the netstack's.
         let sealed = plane.clone();
-        let device = DeviceHandle::spawn(device, peer_key, move || {
-            let _ = sealed.set_gate(GateState::Sealed);
-        });
+        let device = DeviceHandle::spawn(device, peer_key, move || sealed.seal());
         Ok(Self {
             plane,
             device,
@@ -316,7 +348,7 @@ impl StrictTunnel {
     /// Seal (resetting every flow at both ends), give `GotaTun` a moment to send the resets
     /// towards the remote hosts, stop the device.
     pub async fn shutdown(&self) {
-        let _ = self.set_gate(GateState::Sealed);
+        self.plane.seal();
         for _ in 0..20 {
             if self.plane.inject.is_empty() {
                 break;
@@ -337,6 +369,12 @@ impl StrictTunnel {
     #[must_use]
     pub fn filter_stats(&self) -> &FilterStats {
         &self.plane.filter.stats
+    }
+
+    /// The Apps' payload per local port of the sandbox (the worker's own flows are not in it).
+    #[must_use]
+    pub fn port_payload(&self) -> Vec<super::PortPayload> {
+        self.plane.filter.port_payload(std::time::Instant::now())
     }
 
     /// The Apps' flows the filter tracks, `(tcp, udp)` (the worker's own are not among them).

@@ -15,13 +15,23 @@ use std::time::Duration;
 /// measurements are in docs/architecture.md §2.
 const PATIENCE: Duration = Duration::from_micros(250);
 
-/// What a guard says when it is used after its `drop` gave the lock up, which cannot happen.
-pub const HELD: &str = "a guard holds its lock until it is dropped";
+/// The lock a guard holds: its `held`, which is `None` only once the guard's `drop` has given the
+/// lock up through [`Handover::release`]. Nothing can use a guard after its `drop`, so this never
+/// meets `None`.
+#[track_caller]
+#[expect(
+    clippy::expect_used,
+    reason = "a guard's `held` is emptied only by its own `drop`, and a dropped guard cannot be used"
+)]
+pub const fn held<G>(guard: Option<G>) -> G {
+    guard.expect("a guard holds its lock until it is dropped")
+}
 
 /// The hand-over schedule of one lock: the threads that have waited [`PATIENCE`] for it and do
 /// not have it yet.
 ///
 /// The waiting thread keeps the time, so a thread that unlocks only reads this count.
+#[derive(Debug)]
 pub struct Handover {
     starved: AtomicU32,
 }

@@ -2,8 +2,6 @@
 //! keeps it (no second tree, no delete), the recovery report shows it as an App leftover — never
 //! as a leftover worker — and a stop or a reconcile ends it, identity-checked.
 
-#![allow(clippy::unwrap_used, reason = "tests")]
-
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command};
 
@@ -256,11 +254,20 @@ async fn ask(port: u16) -> String {
     let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .unwrap();
-    let _ = s
+    // A server that refuses the client may close before it reads the request (the write fails)
+    // and reset the connection (the read fails): what came back until then is the answer.
+    if let Err(e) = s
         .write_all(b"GET /api/v1/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-        .await;
+        .await
+    {
+        eprintln!("request not sent whole: {e}");
+    }
     let mut out = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(10), s.read_to_end(&mut out)).await;
+    match tokio::time::timeout(Duration::from_secs(10), s.read_to_end(&mut out)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => eprintln!("answer cut short: {e}"),
+        Err(_elapsed) => eprintln!("the server did not close within 10 s"),
+    }
     String::from_utf8_lossy(&out).into_owned()
 }
 
@@ -286,10 +293,7 @@ impl vpn_platform::admission::HostView for OtherUser {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn another_users_client_is_closed_unread_and_counted() {
-    let ports = Arc::new(access::AccessPorts::new(
-        std::sync::Weak::new(),
-        Arc::new(OtherUser),
-    ));
+    let ports = Arc::new(AccessPorts::new(Weak::new(), Arc::new(OtherUser)));
     let host_port = free_port();
     let app = strict_app(InstanceId::new(), host_port);
     ports.sync(std::slice::from_ref(&app)).await;

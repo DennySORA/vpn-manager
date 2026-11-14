@@ -17,14 +17,10 @@
 //!   tunnel. One's worker killed, then the connection stopped, leaves the other's worker, rules
 //!   and flows exactly as they were.
 
-#![allow(
+#![cfg(test)]
+#![expect(
     unsafe_code,
     reason = "libc kill FFI to probe and signal the daemon processes under test"
-)]
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
 )]
 
 use std::fmt::Write as _;
@@ -130,7 +126,15 @@ impl Lab {
         tokio::spawn(async move {
             while let Ok(mut s) = whoami.accept().await {
                 tokio::spawn(async move {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "best effort: a client that closed first wants no answer"
+                    )]
                     let _ = s.write_all(format!("{name}\n").as_bytes()).await;
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "best effort: a client that closed first wants no answer"
+                    )]
                     let _ = s.shutdown().await;
                 });
             }
@@ -147,6 +151,10 @@ impl Lab {
                 }
                 if let Some((names, reply)) = dns_reply(&buf[..n], own) {
                     log.lock().unwrap().extend(names);
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "best effort, as any DNS server: the resolver asks again when an answer is lost"
+                    )]
                     let _ = dns.send_to(&reply, from).await;
                 }
             }
@@ -290,7 +298,7 @@ async fn configure(paths: &Paths, wanted: &[Wanted<'_>]) -> Vec<InstanceId> {
                 purpose: InstancePurpose::General,
                 limits: InstanceLimits::default(),
                 strict: false,
-                transport: vpn_domain::TransportRef::default(),
+                transport: TransportRef::default(),
             })
             .await
             .unwrap();
@@ -346,7 +354,12 @@ impl Stack {
 
     async fn start_manager(&mut self) {
         assert!(self.manager.is_none());
-        let _ = std::fs::remove_file(self.paths.manager_socket());
+        // A killed manager leaves its socket: the new manager is up once the file is there again.
+        if let Err(e) = std::fs::remove_file(self.paths.manager_socket())
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            panic!("the old manager socket was not removed: {e}");
+        }
         let child = Command::new(vpnd())
             .args(["manager", "--state-dir"])
             .arg(&self.paths.state)
@@ -611,7 +624,7 @@ async fn socks(port: u16, target: Target<'_>) -> Result<TcpStream, String> {
     let mut reply = [0u8; 4];
     tokio::time::timeout(Duration::from_secs(10), s.read_exact(&mut reply))
         .await
-        .map_err(|_| "no SOCKS5 reply".to_string())?
+        .map_err(|_elapsed| "no SOCKS5 reply".to_string())?
         .map_err(|e| e.to_string())?;
     if reply[1] != 0 {
         return Err(format!("SOCKS5 reply {}", reply[1]));
@@ -631,7 +644,7 @@ async fn read_all(mut s: TcpStream) -> Result<String, String> {
     let mut out = String::new();
     tokio::time::timeout(Duration::from_secs(10), s.read_to_string(&mut out))
         .await
-        .map_err(|_| "timed out".to_string())?
+        .map_err(|_elapsed| "timed out".to_string())?
         .map_err(|e| e.to_string())?;
     Ok(out)
 }
@@ -669,7 +682,7 @@ async fn echo(s: &mut TcpStream, text: &str) -> Result<(), String> {
     let mut back = vec![0u8; text.len()];
     tokio::time::timeout(Duration::from_secs(10), s.read_exact(&mut back))
         .await
-        .map_err(|_| "no echo".to_string())?
+        .map_err(|_elapsed| "no echo".to_string())?
         .map_err(|e| e.to_string())?;
     if back == text.as_bytes() {
         Ok(())

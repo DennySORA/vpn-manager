@@ -5,6 +5,11 @@
 //! enforced by the tests below):
 //! - `(remote tcp "localhost:P")` also admits `[::1]:P`, where any program could listen (the
 //!   Gateway binds 127.0.0.1 only); `tcp4` admits IPv4 loopback alone.
+//! - `tcp4` admits only an `AF_INET` socket: a dual-stack `AF_INET6` socket connecting to
+//!   `[::ffff:127.0.0.1]:P` — Java's default (`java.net.preferIPv4Stack` false) — fails with
+//!   `EPERM` (2026-11-14), so such an App reaches nothing, the Gateway included, until it uses
+//!   IPv4 sockets (`-Djava.net.preferIPv4Stack=true`). The connection never exists, so the watch
+//!   below never takes it for one from the network.
 //! - Binding is not address-precise: `(local tcp "localhost:*")` (also `tcp4`, `ip4`, and after
 //!   a `deny` of `(local ip "*:*")`) lets the App listen on `0.0.0.0` and even on the LAN
 //!   address itself, and accept connections from the network.
@@ -34,7 +39,7 @@
 //! services such as `WebKit`'s network process, `LaunchServices` opening another app, certificate
 //! checks by trustd) run outside the profile, and Apple does not document `sandbox-exec` as a
 //! stable interface.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "the seatbelt profile timestamp calls localtime_r via libc"
 )]
@@ -75,8 +80,9 @@ pub fn create_markers(dir: &Path, run_id: &str) -> std::io::Result<()> {
             .file_name()
             .to_str()
             .is_some_and(|n| n.starts_with(MARKER_PREFIX))
+            && let Err(e) = std::fs::remove_file(entry.path())
         {
-            let _ = std::fs::remove_file(entry.path());
+            tracing::debug!(error = %e, marker = %entry.path().display(), "old run marker kept");
         }
     }
     let (denied, open) = marker_paths(dir, run_id);
@@ -242,23 +248,23 @@ pub fn profile(p: &Policy) -> Result<String, Text> {
     for dir in &p.own {
         for private in p.private.iter().filter(|pr| dir.starts_with(pr)) {
             let mut a = dir.parent();
-            while let Some(anc) = a {
-                if !anc.starts_with(private) {
+            while let Some(ancestor) = a {
+                if !ancestor.starts_with(private) {
                     break;
                 }
-                if !ancestors.iter().any(|x| x == anc) {
-                    ancestors.push(anc.to_path_buf());
+                if !ancestors.iter().any(|x| x == ancestor) {
+                    ancestors.push(ancestor.to_path_buf());
                 }
-                a = anc.parent();
+                a = ancestor.parent();
             }
         }
     }
     if !ancestors.is_empty() {
-        let lits: Vec<String> = ancestors
+        let literals: Vec<String> = ancestors
             .iter()
             .map(|a| literal(a).map(|l| format!("(literal {l})")))
             .collect::<Result<_, _>>()?;
-        lines.push(format!("(allow file-read-metadata {})", lits.join(" ")));
+        lines.push(format!("(allow file-read-metadata {})", literals.join(" ")));
     }
     // Last, so no rule above can open them: how the run's processes are found. The App may
     // read neither change nor remove them (a missing marker would read as denied to everyone).
@@ -436,8 +442,11 @@ pub fn denials(tag: &str, since: &LogCursor) -> Option<(u64, LogCursor)> {
                     Err(_) => return None,
                 }
                 if line.last() != Some(&b'\n') && line.len() >= 64 * 1024 {
-                    // Skip the rest of an over-long line without buffering it.
-                    let _ = lines.skip_until(b'\n');
+                    // Skip the rest of an over-long line without buffering it; the reading goes
+                    // on either way.
+                    if let Err(e) = lines.skip_until(b'\n') {
+                        tracing::trace!(error = %e, "skipping an over-long log line failed");
+                    }
                     continue;
                 }
                 let Ok(entry) = serde_json::from_slice::<serde_json::Value>(&line) else {

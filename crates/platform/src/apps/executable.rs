@@ -8,7 +8,7 @@
 //! Not covered: the same user replacing the file between the check and `exec` (that user could
 //! run it directly anyway), and the other files of a bundle (frameworks, plug-ins): only the
 //! main executable is hashed.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "executable checks call access(2) and getuid(2) via libc"
 )]
@@ -133,7 +133,7 @@ pub fn inspect(path: &str, private: &[PathBuf]) -> ExecutableCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
     /// The path no longer resolves to an acceptable file (message for the user).
-    Invalid(vpn_domain::Text),
+    Invalid(Text),
     /// It resolves to another file, or the file's content changed: the user must approve it.
     Changed(Text),
 }
@@ -264,8 +264,11 @@ pub(crate) fn info_plist_string(bundle: &Path, key: &str) -> std::io::Result<Opt
         .stderr(Stdio::null())
         .spawn()?;
     let mut out = String::new();
-    if let Some(stdout) = child.stdout.take() {
-        let _ = stdout.take(4096).read_to_string(&mut out);
+    // A failed read is only logged: plutil's exit status still decides, and it is waited for.
+    if let Some(stdout) = child.stdout.take()
+        && let Err(e) = stdout.take(4096).read_to_string(&mut out)
+    {
+        tracing::debug!(error = %e, key, "plutil's answer unreadable");
     }
     let ok = super::wait_bounded(&mut child, std::time::Duration::from_secs(5))
         .is_some_and(|s| s.success());
@@ -317,7 +320,8 @@ fn bundle_executable(bundle: &Path) -> Result<PathBuf, Issue> {
         .join("Contents/MacOS")
         .join(name)
         .canonicalize()
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::debug!(error = %e, "a .app's main executable does not resolve");
             bad(tr!(
                 "The .app's main executable cannot be found (Contents/MacOS)",
                 "找不到 .app 的主執行檔（Contents/MacOS）",

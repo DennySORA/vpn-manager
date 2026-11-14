@@ -4,13 +4,11 @@
 //! while the Gateway cannot carry it (fail closed); a changed host key stops the job; a clear
 //! forgets one job's names for good while its unfinished file still resumes.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 mod support;
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -48,7 +46,7 @@ async fn files_are_downloaded_put_in_place_and_deleted_remotely() {
     assert_eq!(std::fs::read(w.local.join("empty")).unwrap(), b"");
     assert_eq!(w.server.names("todo"), [".c.part", "sub"]);
     assert!(w.partials().is_empty(), "{:?}", w.partials());
-    let records = history(&d, id).await;
+    let records = history_of(&d, id, 3).await;
     assert_eq!(records.len(), 3);
     assert!(
         records
@@ -91,12 +89,14 @@ async fn files_are_downloaded_put_in_place_and_deleted_remotely() {
     );
     // Statuses were published, at most one per job and tick.
     assert!(!w.statuses.0.lock().is_empty());
-    let lines = log(&d, id).await;
+    let downloaded =
+        |lines: &[SshDownloadLogEntry]| lines.iter().filter(|l| l.code == "DOWNLOADED").count();
+    let lines = log_until(&d, id, "a line per file", |lines| downloaded(lines) >= 3).await;
     assert!(
         lines.iter().any(|l| l.code == "HOST_KEY_RECORDED"),
         "{lines:?}"
     );
-    assert_eq!(lines.iter().filter(|l| l.code == "DOWNLOADED").count(), 3);
+    assert_eq!(downloaded(&lines), 3, "{lines:?}");
     d.shutdown().await;
 }
 
@@ -104,6 +104,8 @@ async fn files_are_downloaded_put_in_place_and_deleted_remotely() {
 async fn a_name_taken_locally_gets_a_unique_name_and_nothing_is_replaced() {
     let w = World::new(RouteKind::Ready).await;
     std::fs::create_dir_all(&w.local).unwrap();
+    // A job refuses a folder others can write: the umask (002 on Debian) must not decide that.
+    std::fs::set_permissions(&w.local, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(w.local.join("report.pdf"), b"mine").unwrap();
     w.server.put("todo", "report.pdf", b"theirs");
     let d = w.start().await;
@@ -123,7 +125,7 @@ async fn a_name_taken_locally_gets_a_unique_name_and_nothing_is_replaced() {
         "{other}"
     );
     assert_eq!(std::fs::read(w.local.join(&other)).unwrap(), b"theirs");
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert!(h[0].local_path.as_deref().unwrap().ends_with(&other));
     d.shutdown().await;
 }
@@ -158,7 +160,7 @@ async fn a_broken_connection_resumes_where_the_partial_file_ends() {
         w.gateway.accepted.load(Ordering::SeqCst) >= 2,
         "it reconnected"
     );
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);
     assert!(w.server.names("doing").is_empty() && w.server.names("todo").is_empty());
     d.shutdown().await;
@@ -206,7 +208,7 @@ async fn final_size_verification_keeps_the_source_until_it_can_be_confirmed() {
                 .is_some_and(|status| status.completed == 1)
         })
         .await;
-        let records = history(&d, id).await;
+        let records = history_of(&d, id, 1).await;
         assert_eq!(records.len(), 1, "{fault:?}");
         assert_eq!(records[0].state, SshDownloadTransferState::Completed);
         assert!(records[0].error.is_none(), "{records:?}");
@@ -241,7 +243,7 @@ async fn a_size_the_handle_does_not_report_is_read_from_the_path() {
     assert_eq!(w.server.names("doing"), NONE);
     assert_eq!(w.server.names("failed"), NONE);
     assert_eq!(w.partials(), NONE);
-    let records = history(&d, id).await;
+    let records = history_of(&d, id, 1).await;
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].state, SshDownloadTransferState::Completed);
     assert!(records[0].error.is_none(), "{records:?}");
@@ -385,7 +387,7 @@ async fn a_source_replaced_between_attempts_is_downloaded_again_from_the_start()
         w.server.names("doing").is_empty()
     })
     .await;
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);
     assert_eq!(w.partials(), NONE);
@@ -450,7 +452,7 @@ async fn a_file_with_the_name_and_size_of_a_download_is_not_taken_for_it() {
         w.server.names("doing").is_empty()
     })
     .await;
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);
     assert!(h[0].local_path.as_deref().unwrap().ends_with(&ours));
@@ -499,7 +501,7 @@ async fn a_large_file_fetched_over_several_connections_is_the_source_byte_for_by
         w.server.names("doing").is_empty()
     })
     .await;
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);
     assert_eq!(w.partials(), NONE);
@@ -534,7 +536,7 @@ async fn a_helper_that_loses_its_connection_leaves_no_gap() {
         !log(&d, id).await.iter().any(|e| e.code == "ATTEMPT_FAILED"),
         "the helper's broken connection failed the file's attempt"
     );
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);
     assert_eq!(w.partials(), NONE);
@@ -577,7 +579,7 @@ async fn a_helper_that_finds_another_file_ends_the_attempt() {
         w.server.names("doing").is_empty()
     })
     .await;
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);
     assert_eq!(w.partials(), NONE);
@@ -634,7 +636,7 @@ async fn a_manager_restart_continues_the_unfinished_file_from_its_record() {
         !after.is_empty() && after.iter().all(|(_, off)| *off > 0),
         "resumed at 0: {after:?}"
     );
-    let h = history(&d, id).await;
+    let h = history_of(&d, id, 1).await;
     assert_eq!(h.len(), 1, "one file, one record: {h:?}");
     assert_eq!(h[0].id, had);
     assert_eq!(h[0].state, SshDownloadTransferState::Completed);

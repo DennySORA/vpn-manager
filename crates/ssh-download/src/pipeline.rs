@@ -37,7 +37,9 @@ pub struct Read {
 impl Read {
     /// Give the transfer its answer (nothing happens when it no longer waits for it).
     pub fn answer(self, answer: Answer) {
-        let _ = self.answer.send(answer);
+        if self.answer.send(answer).is_err() {
+            tracing::trace!("read answer dropped: the transfer no longer waits for it");
+        }
     }
 }
 

@@ -93,7 +93,7 @@ async fn view(state: &AppState, id: InstanceId) -> HttpResult<InstanceView> {
         .await?
         .into_iter()
         .find(|v| v.spec.id == id)
-        .ok_or_else(|| HttpError(ApiError::not_found("Instance")))
+        .ok_or_else(|| HttpError(ApiError::connection_not_found()))
 }
 
 pub async fn list(State(state): State<AppState>) -> HttpResult<Json<Vec<InstanceView>>> {
@@ -244,7 +244,8 @@ pub async fn delete(
                 .filter(|s| !s.is_empty())
                 .map(str::parse)
                 .collect::<Result<_, _>>()
-                .map_err(|_| {
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "gateways query refused");
                     bad(
                         ErrorCode::InvalidRequest,
                         tr!(

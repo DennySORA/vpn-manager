@@ -839,12 +839,13 @@ fn ddns_name(raw: &str) -> Result<String, SiteError> {
 fn reserved(list: &PortList, port: u16) -> Result<Port, SiteError> {
     list.ports
         .iter()
-        .find(|p| p.port == port)
+        .find(|p| p.number == port)
         .cloned()
         .ok_or(SiteError::NotReserved(port))
 }
 
 /// The website client of one operation, over the operation's HTTPS client (IPv4).
+#[derive(Debug)]
 pub struct Site<'a, C> {
     http: &'a HttpsClient<C>,
     family: Family,
@@ -911,7 +912,7 @@ impl<'a, C: Connect> Site<'a, C> {
             });
         }
         if let Some(p) = port
-            && before.ports.iter().any(|x| x.port == p)
+            && before.ports.iter().any(|x| x.number == p)
         {
             return Err(SiteError::AlreadyReserved(p));
         }
@@ -1629,10 +1630,10 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
             .await
         {
             Ok(Outcome::Done(new)) => {
-                if port.is_some_and(|p| p != new.port) {
+                if port.is_some_and(|p| p != new.number) {
                     tracing::warn!(
                         asked = port,
-                        got = new.port,
+                        got = new.number,
                         "AirVPN reserved another port than the one asked for"
                     );
                 }
@@ -1659,11 +1660,11 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
                 !before
                     .ports
                     .iter()
-                    .any(|b| b.port == p.port && b.pool == p.pool)
+                    .any(|b| b.number == p.number && b.pool == p.pool)
             })
             .collect();
         let mine = match port {
-            Some(p) => new.iter().find(|n| n.port == p).copied(),
+            Some(p) => new.iter().find(|n| n.number == p).copied(),
             None if new.len() == 1 => new.first().copied(),
             None => None,
         };
@@ -1679,7 +1680,7 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
     }
 
     async fn remove(&mut self, entry: &Port) -> Result<(), SiteError> {
-        let (port, pool) = (entry.port.to_string(), entry.pool.to_string());
+        let (port, pool) = (entry.number.to_string(), entry.pool.to_string());
         let params = [("port", port.as_str()), ("pool", pool.as_str())];
         let (said, failure) = match self.call("delete", &params, ports::deleted).await {
             Ok(Outcome::Done(())) => return Ok(()),
@@ -1698,12 +1699,12 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
         let Ok(after) = self.list().await else {
             return Err(SiteError::OutcomeUnknown(Operation::Delete));
         };
-        if !after.ports.iter().any(|p| p.port == entry.port) {
+        if !after.ports.iter().any(|p| p.number == entry.number) {
             return Ok(());
         }
         Err(failure.unwrap_or(SiteError::Refused {
             action: Operation::Delete,
-            port: Some(entry.port),
+            port: Some(entry.number),
             message: said,
         }))
     }
@@ -1716,7 +1717,7 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
         entry: &Port,
         todo: &[(Setting, String)],
     ) -> Result<Edited, SiteError> {
-        let (port, pool) = (entry.port.to_string(), entry.pool.to_string());
+        let (port, pool) = (entry.number.to_string(), entry.pool.to_string());
         let mut refused: Vec<(Setting, Option<String>)> = Vec::new();
         let mut stopped: Option<(usize, SiteError)> = None;
         for (i, (setting, value)) in todo.iter().enumerate() {
@@ -1750,7 +1751,7 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
         let Ok(after) = self.list().await else {
             return Err(SiteError::OutcomeUnknown(Operation::Change));
         };
-        let now = reserved(&after, entry.port)?;
+        let now = reserved(&after, entry.number)?;
         let (mut saved, mut unsaved) = (Vec::new(), Vec::new());
         for (i, (setting, value)) in todo.iter().enumerate() {
             if setting.holds(&now, value) {
@@ -1779,13 +1780,13 @@ impl<'r, 'a, C: Connect> Run<'r, 'a, C> {
 
     /// The connected sessions that use `entry`.
     async fn sessions(&mut self, entry: &Port) -> Result<Vec<SessionItem>, SiteError> {
-        let (port, pool) = (entry.port.to_string(), entry.pool.to_string());
+        let (port, pool) = (entry.number.to_string(), entry.pool.to_string());
         self.ask(
             "sessions",
             &[("port", &port), ("pool", &pool)],
             ports::sessions,
             Operation::Test,
-            Some(entry.port),
+            Some(entry.number),
         )
         .await
     }

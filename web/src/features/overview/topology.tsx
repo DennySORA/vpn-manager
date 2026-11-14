@@ -24,7 +24,7 @@ import { staggerStyle } from "@/components/ui/motion";
 import { PresenceList } from "@/components/ui/presence-list";
 import { CHIP_TONE } from "@/components/ui/tones";
 import { ToolButton } from "@/components/ui/tool-strip";
-import { sandboxApps, sandboxAppsLabel } from "@/features/apps/model";
+import { sandboxApps } from "@/features/apps/model";
 import { KIND_LABEL } from "@/features/gateways/gateway-dialog";
 import { type Flow, flowing, portKinds, SSH_PROXY_COLOR, SSH_PULL_COLOR } from "@/features/gateways/ssh-traffic";
 import { instanceLook, locationText } from "@/features/instances/model";
@@ -379,20 +379,19 @@ function ConnectionLane({
       ),
     });
   }
-  const first = sandbox[0];
-  if (first) {
-    const running = sandbox.filter((a) => a.status?.state === "running").length;
-    const flow = rates?.sandbox ? { rx: rates.sandbox.rx_bps, tx: rates.sandbox.tx_bps } : null;
+  // Each App of the sandbox on its own: its share of the sandbox's payload. An App the sample has no part for carried
+  // nothing yet (0); without a sample of the sandbox it is unknown ("—").
+  for (const app of sandbox) {
+    const running = app.status?.state === "running";
+    const own = rates?.sandbox?.apps.find((r) => r.app_id === app.spec.id);
+    const flow = own ? { rx: own.rx_bps, tx: own.tx_bps } : rates?.sandbox ? { rx: 0, tx: 0 } : null;
     nodes.push({
-      lane: { key: "sandbox", kind: "sandbox", bps: both(flow) },
+      lane: { key: `app:${app.spec.id}`, kind: "sandbox", bps: both(flow) },
       node: (
         <SourceNode
-          key="sandbox"
-          to={`/apps/${first.spec.id}`}
-          title={m.sandbox.title(
-            sandbox.map((a) => a.spec.name),
-            running,
-          )}
+          key={`app:${app.spec.id}`}
+          to={`/apps/${app.spec.id}`}
+          title={m.sandbox.title(app.spec.name, running)}
           lead={
             <AppWindow
               aria-hidden
@@ -400,8 +399,8 @@ function ConnectionLane({
               strokeWidth={2}
             />
           }
-          label={sandboxAppsLabel(sandbox)}
-          flow={flow}
+          label={app.spec.name}
+          flow={running ? flow : null}
           idle={!running}
         />
       ),
@@ -554,7 +553,7 @@ export function Topology({
   index = 0,
 }: {
   views: InstanceView[];
-  /** Every managed App: a connection's strict ones are drawn as its App sandbox. */
+  /** Every managed App: a connection's strict ones are drawn each on its own, in its App sandbox. */
   apps: AppView[];
   /** The running connections whose live rates the lanes show (read here, so only the topology re-renders per tick). */
   liveIds: string[];

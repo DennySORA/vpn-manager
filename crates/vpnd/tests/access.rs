@@ -15,16 +15,15 @@
 //!
 //! Nothing needs root or changes the host. A failing run still kills everything it started.
 
-#![allow(
-    unsafe_code,
-    reason = "libc kill FFI to probe and signal the daemon processes under test"
+#![cfg(test)]
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        unsafe_code,
+        reason = "libc kill FFI to probe and signal the daemon processes under test"
+    )
 )]
 #![cfg(target_os = "linux")]
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
 
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -135,6 +134,10 @@ async fn http_at(
         return (0, String::new());
     }
     let mut resp = Vec::new();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "what arrived is parsed either way: a timeout or a reset leaves part of the answer, or none (status 0)"
+    )]
     let _ = tokio::time::timeout(Duration::from_secs(30), s.read_to_end(&mut resp)).await;
     let text = String::from_utf8_lossy(&resp).into_owned();
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
@@ -225,9 +228,9 @@ async fn log_until(path: &Path, from: usize, want: &str) -> (usize, String) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
     loop {
         let text = std::fs::read_to_string(path).unwrap_or_default();
-        if text.len() > from {
+        if let Some(rest) = text.get(from..) {
             let mut offset = from;
-            for line in text[from..].split_inclusive('\n') {
+            for line in rest.split_inclusive('\n') {
                 offset += line.len();
                 if line.ends_with('\n') && line.contains(want) {
                     return (offset, line.trim_end().to_owned());
@@ -247,14 +250,21 @@ async fn log_until(path: &Path, from: usize, want: &str) -> (usize, String) {
 async fn exchange(at: SocketAddr, data: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut s = tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(at))
         .await
-        .map_err(|_| std::io::Error::other("connect timed out"))??;
-    // A refused client may be closed before anything is written.
+        .map_err(|_elapsed| std::io::Error::other("connect timed out"))??;
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a refused client may be closed before anything is written: the read below tells"
+    )]
     let _ = s.write_all(data).await;
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a refused client may be closed before anything is written: the read below tells"
+    )]
     let _ = s.shutdown().await;
     let mut out = Vec::new();
     tokio::time::timeout(Duration::from_secs(10), s.read_to_end(&mut out))
         .await
-        .map_err(|_| std::io::Error::other("no answer"))??;
+        .map_err(|_elapsed| std::io::Error::other("no answer"))??;
     Ok(out)
 }
 
@@ -416,6 +426,10 @@ async fn strict_app_ports_reach_the_host_and_nothing_else() {
             }
         }
         let mut child = child;
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a bounded wait for the end: one still running is killed when dropped (`kill_on_drop`)"
+        )]
         let _ = tokio::time::timeout(Duration::from_secs(15), child.wait()).await;
     }
     for pid in &cleanup.pids {
@@ -522,7 +536,7 @@ async fn configure_access(paths: &Paths, lab: &LabPeer) -> InstanceId {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: true,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();

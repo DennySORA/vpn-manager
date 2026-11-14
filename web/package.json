@@ -1,6 +1,6 @@
 {
   "name": "vpn-manager-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "VPN Manager 桌面工作台（React／Vite／Tailwind CSS；繁體中文、英文、日文）。由 vpnd controller 嵌入提供。",

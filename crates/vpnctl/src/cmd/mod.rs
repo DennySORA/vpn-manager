@@ -19,8 +19,6 @@ pub mod ssh_download;
 pub mod status;
 pub mod transport;
 
-use std::fmt::Write as _;
-
 use vpn_domain::{ApiError, InstanceView, Operation, Text};
 
 use crate::client::Client;
@@ -103,31 +101,32 @@ impl Failure {
         match self {
             Self::Usage(m) | Self::Unreachable(m) | Self::Invalid(m) => m.clone(),
             Self::Api(e) => {
-                let mut s = e.message.zh_tw.clone();
-                for f in &e.field_errors {
-                    let _ = write!(s, "\n  {}：{}", f.path, f.message.zh_tw);
-                }
+                let mut lines = vec![e.message.zh_tw.clone()];
+                lines.extend(
+                    e.field_errors
+                        .iter()
+                        .map(|f| format!("  {}：{}", f.path, f.message.zh_tw)),
+                );
                 if let Some(op) = e.operation_id {
-                    let _ = write!(s, "\n  operation {op}");
+                    lines.push(format!("  operation {op}"));
                 }
-                s
+                lines.join("\n")
             }
             Self::Unknown {
                 key,
                 operation,
                 why,
             } => {
-                let mut s = format!("結果未知，沒有重送：{why}");
+                let mut lines = vec![format!("結果未知，沒有重送：{why}")];
                 if let Some(op) = operation {
-                    let _ = write!(s, "\n  operation {}（{:?}）", op.id, op.status);
+                    lines.push(format!("  operation {}（{:?}）", op.id, op.status));
                 }
                 if let Some(k) = key {
-                    let _ = write!(
-                        s,
-                        "\n  Idempotency-Key {k}；稍後可查 GET /v1/operations/by-key/{k}"
-                    );
+                    lines.push(format!(
+                        "  Idempotency-Key {k}；稍後可查 GET /v1/operations/by-key/{k}"
+                    ));
                 }
-                s
+                lines.join("\n")
             }
         }
     }

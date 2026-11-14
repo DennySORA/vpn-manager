@@ -5,10 +5,7 @@
 //! Eddie's server side must. Every connection is an in-memory pipe: nothing touches a socket, a
 //! resolver or `AirVPN`.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::io;
 use std::net::Ipv4Addr;
@@ -108,7 +105,15 @@ impl Fake {
             Answer::Xml(xml) => http(200, &encrypt(&key, &iv, xml.as_bytes())),
             Answer::Status(status) => http(status, b""),
         };
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the client may have given up already; the tests check what the client saw"
+        )]
         let _ = io.write_all(&response).await;
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the client may have given up already; the tests check what the client saw"
+        )]
         let _ = io.shutdown().await;
     }
 

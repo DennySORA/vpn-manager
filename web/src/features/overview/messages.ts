@@ -1,4 +1,4 @@
-// Text of the Overview page (總覽): the summary figures, the setup steps, what needs attention, the traffic path
+// Text of the Overview page (總覽): the summary figures, what needs attention, the traffic path
 // (topology.tsx) and the traffic chart under it (traffic-chart.tsx). 連線 is a connection (an Instance); the SSH
 // downloads, the SSH proxy and the App sandbox are the parts of a connection's traffic, named as the top bar's traffic
 // strip names them.
@@ -37,32 +37,6 @@ export const m = defineMessages({
       sandboxShare: (rate: string) => `Including App sandbox ${rate}`,
       /** Under the count of what needs attention. */
       serving: (count: number) => `${count} ${gatewaysEn(count)} serving`,
-    },
-    onboarding: {
-      title: "Getting started",
-      intro: "Four steps to make applications' traffic leave only through a WireGuard exit.",
-      /** After a step's title, for assistive technology. */
-      done: " (done)",
-      notDone: " (not done yet)",
-      profile: {
-        title: "Get a WireGuard profile",
-        addAccount: "Add provider account",
-        importConf: "Import .conf",
-        body: "Import the .conf your provider gives you, or add a Mullvad or AirVPN account and pick a server directly; the private key is only stored encrypted and cannot be read back.",
-      },
-      connection: {
-        title: "Create a connection",
-        body: "A connection is an independent exit; you can have several at once.",
-      },
-      gateway: {
-        title: "Create a local Gateway",
-        body: "Applications use a connection through a SOCKS5 or HTTP Gateway on 127.0.0.1.",
-      },
-      verify: {
-        title: "Start it and pass verification",
-        go: "Go",
-        body: "Connections open only after both the handshake and the DNS probe pass.",
-      },
     },
     attention: {
       title: "Needs attention",
@@ -112,9 +86,8 @@ export const m = defineMessages({
     },
     sandbox: {
       label: "App sandbox",
-      /** `names`: the strict apps of the connection; `running`: how many of them run. */
-      title: (names: readonly string[], running: number) =>
-        `App sandbox: ${names.join(", ")} (${running ? (names.length > 1 ? `${running} running` : "running") : "not running"})`,
+      /** One strict App of the connection, in its sandbox. */
+      title: (name: string, running: boolean) => `${name} in the App sandbox (${running ? "running" : "not running"})`,
     },
     lane: {
       noGateways: "No Gateways",
@@ -173,31 +146,6 @@ export const m = defineMessages({
       sandboxShare: (rate) => `含 App 沙箱 ${rate}`,
       serving: (count) => `${count} 個代理埠服務中`,
     },
-    onboarding: {
-      title: "開始使用",
-      intro: "四個步驟讓應用程式的流量只經 WireGuard 出口送出。",
-      done: "（已完成）",
-      notDone: "（尚未完成）",
-      profile: {
-        title: "取得 WireGuard 設定",
-        addAccount: "加入供應商帳號",
-        importConf: "匯入 .conf",
-        body: "匯入供應商提供的 .conf，或加入 Mullvad／AirVPN 帳號直接挑選伺服器建立；私鑰只會加密保存，無法讀回。",
-      },
-      connection: {
-        title: "建立連線",
-        body: "一條連線就是一個獨立的出口，可同時有多條。",
-      },
-      gateway: {
-        title: "建立本機代理埠",
-        body: "應用程式透過 127.0.0.1 上的 SOCKS5 或 HTTP 代理埠使用連線。",
-      },
-      verify: {
-        title: "啟動並通過驗證",
-        go: "前往",
-        body: "握手與 DNS 探測都通過後才會開放連線。",
-      },
-    },
     attention: {
       title: "需要處理",
       items: "需要處理的項目",
@@ -237,8 +185,7 @@ export const m = defineMessages({
     },
     sandbox: {
       label: "App 沙箱",
-      title: (names, running) =>
-        `App 沙箱：${names.join("、")}（${running ? (names.length > 1 ? `${running} 個執行中` : "執行中") : "未執行"}）`,
+      title: (name, running) => `App 沙箱裡的 ${name}（${running ? "執行中" : "未執行"}）`,
     },
     lane: {
       noGateways: "沒有代理埠",
@@ -293,31 +240,6 @@ export const m = defineMessages({
       sandboxShare: (rate) => `うちアプリのサンドボックス ${rate}`,
       serving: (count) => `${count} 個のゲートウェイが稼働中`,
     },
-    onboarding: {
-      title: "はじめに",
-      intro: "4 つのステップで、アプリケーションのトラフィックが WireGuard 出口だけを通るようにします。",
-      done: "（完了）",
-      notDone: "（未完了）",
-      profile: {
-        title: "WireGuard 設定を用意",
-        addAccount: "プロバイダーのアカウントを追加",
-        importConf: ".conf をインポート",
-        body: "プロバイダーが提供する .conf をインポートするか、Mullvad／AirVPN のアカウントを追加してサーバーを直接選んで作成します。秘密鍵は暗号化して保存されるだけで、読み出すことはできません。",
-      },
-      connection: {
-        title: "接続を作成",
-        body: "接続はそれぞれ独立した出口で、同時に複数持てます。",
-      },
-      gateway: {
-        title: "ローカルのゲートウェイを作成",
-        body: "アプリケーションは 127.0.0.1 上の SOCKS5 または HTTP のゲートウェイを通じて接続を使います。",
-      },
-      verify: {
-        title: "開始して検証に合格",
-        go: "移動",
-        body: "ハンドシェイクと DNS の疎通確認の両方に合格してから、接続を受け付けます。",
-      },
-    },
     attention: {
       title: "要対応",
       items: "要対応の項目",
@@ -359,8 +281,7 @@ export const m = defineMessages({
     },
     sandbox: {
       label: "アプリのサンドボックス",
-      title: (names, running) =>
-        `アプリのサンドボックス：${names.join("、")}（${running ? (names.length > 1 ? `${running} 個が実行中` : "実行中") : "未実行"}）`,
+      title: (name, running) => `アプリのサンドボックス内の ${name}（${running ? "実行中" : "未実行"}）`,
     },
     lane: {
       noGateways: "ゲートウェイなし",

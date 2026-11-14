@@ -144,7 +144,7 @@ fn known(provider: ProviderKind, gate: ProviderGateKind) -> (GateStatus, Text) {
 }
 
 /// The latest record of every gate.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct GateBook(HashMap<(ProviderKind, ProviderGateKind), ProviderGate>);
 
 impl GateBook {

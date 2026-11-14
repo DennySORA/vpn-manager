@@ -128,9 +128,9 @@ async fn store_imported(
         Ok(_) => Err(ApiError::internal()),
         Err(e) => {
             // Do not leave unreferenced key material behind.
-            let _ = link.call(Call::DeleteSecret(sk)).await;
+            link.discard_secret(sk).await;
             if let Some(r) = psk_ref {
-                let _ = link.call(Call::DeleteSecret(r)).await;
+                link.discard_secret(r).await;
             }
             Err(e)
         }
@@ -347,10 +347,10 @@ pub async fn delete(
             let device_key = p.provider == ProviderKind::Mullvad
                 && matches!(p.source, ProfileSource::Provider { .. });
             if !device_key {
-                let _ = link.call(Call::DeleteSecret(p.interface.private_key)).await;
+                link.discard_secret(p.interface.private_key).await;
             }
             if let Some(r) = p.peer.preshared_key {
-                let _ = link.call(Call::DeleteSecret(r)).await;
+                link.discard_secret(r).await;
             }
             Ok((vec![id.to_string()], ()))
         },

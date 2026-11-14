@@ -215,6 +215,12 @@ impl ApiError {
         )
     }
 
+    /// The connection (Instance) a request names is not there, in the interface's words.
+    #[must_use]
+    pub fn connection_not_found() -> Self {
+        Self::not_found(tr!("this connection", "這條連線", "この接続"))
+    }
+
     #[must_use]
     pub fn internal() -> Self {
         Self::new(

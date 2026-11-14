@@ -15,7 +15,7 @@
 //! | `proxy_env`      | [`Plain`]              | macOS, Linux (proxy variables only)     |
 //! | `enforced_proxy` | [`Seatbelt`]           | macOS (`sandbox-exec`)                  |
 //! | `strict_netns`   | a [`SandboxProvider`]  | Linux; supplied by the strict sandbox   |
-#![allow(
+#![expect(
     unsafe_code,
     reason = "managed App launch calls fcntl, write, getuid and getpwuid_r via libc"
 )]
@@ -62,8 +62,11 @@ pub fn account() -> Option<(String, PathBuf)> {
     if r != 0 || found.is_null() || pwd.pw_name.is_null() || pwd.pw_dir.is_null() {
         return None;
     }
-    // SAFETY: getpwuid_r succeeded: both are NUL-terminated strings inside `buf`.
-    let (name, dir) = unsafe { (CStr::from_ptr(pwd.pw_name), CStr::from_ptr(pwd.pw_dir)) };
+    // SAFETY: getpwuid_r succeeded: the name is a NUL-terminated string inside `buf`, which
+    // outlives `name`.
+    let name = unsafe { CStr::from_ptr(pwd.pw_name) };
+    // SAFETY: the same for the home directory.
+    let dir = unsafe { CStr::from_ptr(pwd.pw_dir) };
     Some((
         name.to_string_lossy().into_owned(),
         PathBuf::from(OsStr::from_bytes(dir.to_bytes())),
@@ -72,6 +75,7 @@ pub fn account() -> Option<(String, PathBuf)> {
 
 /// What to run. `program` is the approved, resolved executable; `args` follow it (placeholders
 /// already replaced); `env` is the whole environment.
+#[derive(Debug)]
 pub struct AppCommand {
     pub program: PathBuf,
     pub args: Vec<OsString>,
@@ -103,6 +107,7 @@ pub struct SpawnLimits {
 
 /// A started App: its root process (the manager is its parent and reaps it) and that process's
 /// identity.
+#[derive(Debug)]
 pub struct SpawnedApp {
     pub child: tokio::process::Child,
     pub identity: ProcessIdentity,
@@ -137,6 +142,7 @@ pub trait IsolationBackend: Send + Sync {
 
 /// `proxy_env`: the App's network is not confined; only its proxy variables point at the
 /// Gateway.
+#[derive(Debug)]
 pub struct Plain;
 
 impl IsolationBackend for Plain {
@@ -153,6 +159,7 @@ impl IsolationBackend for Plain {
 
 /// `enforced_proxy` on macOS: `sandbox-exec -p <profile> <program> <args…>` (same pid; the
 /// profile is in force before the App's first instruction).
+#[derive(Debug)]
 pub struct Seatbelt {
     pub profile: String,
 }
@@ -220,22 +227,23 @@ fn launch(program: OsString, args: Vec<OsString>, cmd: AppCommand) -> io::Result
         .process_group(0)
         // The App outlives a dropped handle: only an explicit stop ends it.
         .kill_on_drop(false);
-    // SAFETY: runs in the forked child before exec (after stdio is in place) and only calls
-    // async-signal-safe functions (write, setrlimit, fcntl / close_range).
-    unsafe {
-        c.pre_exec(move || {
-            if let Some(fd) = limits.cgroup_procs {
-                // "0" moves the writing process; the manager confirms it after the spawn.
-                libc::write(fd, b"0".as_ptr().cast(), 1);
-            }
-            if let Some(n) = limits.open_files {
-                // A limit the user asked for is in force before the App runs, or it does not run.
-                crate::limits::set_open_files(n)?;
-            }
-            crate::process::cloexec_from(3);
-            Ok(())
-        });
-    }
+    let before_exec = move || -> io::Result<()> {
+        if let Some(fd) = limits.cgroup_procs {
+            // "0" moves the writing process; the manager confirms it after the spawn.
+            // SAFETY: write(2) of one byte from a static buffer to a descriptor the parent keeps
+            // open across the spawn.
+            unsafe { libc::write(fd, b"0".as_ptr().cast(), 1) };
+        }
+        if let Some(n) = limits.open_files {
+            // A limit the user asked for is in force before the App runs, or it does not run.
+            crate::limits::set_open_files(n)?;
+        }
+        crate::process::cloexec_from(3);
+        Ok(())
+    };
+    // SAFETY: the closure runs in the forked child before exec (after stdio is in place) and
+    // only calls async-signal-safe functions (write, setrlimit, fcntl / close_range).
+    unsafe { c.pre_exec(before_exec) };
     let child = c.spawn()?;
     let pid = child
         .id()
@@ -267,8 +275,13 @@ pub(crate) fn wait_bounded(
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                // Past the deadline, or its state unreadable: ended and reaped, no status.
+                if let Err(e) = child.kill() {
+                    tracing::debug!(error = %e, "helper process not killed");
+                }
+                if let Err(e) = child.wait() {
+                    tracing::debug!(error = %e, "helper process not reaped");
+                }
                 return None;
             }
         }
@@ -291,9 +304,9 @@ pub fn capabilities(strict_backend: bool) -> Vec<vpn_domain::Capability> {
             "app_enforced_proxy",
             CapabilityState::Supported,
             tr!(
-                "macOS Seatbelt: the app's process tree can reach only its Gateway, over TCP, and every other network is refused; it is not complete app isolation (system services that connect on its behalf are not covered)",
-                "macOS Seatbelt：App 的程序樹只能以 TCP 連到所屬代理埠，其他網路一律拒絕；不是完整的 App 隔離（系統服務代為連線不在此限）",
-                "macOS Seatbelt：アプリのプロセスツリーは TCP で所属のゲートウェイにだけ接続でき、ほかのネットワークはすべて拒否されます。完全なアプリの分離ではありません（システムサービスが代わりに行う接続は対象外です）"
+                "macOS Seatbelt: the app's process tree can reach only its Gateway, over IPv4 TCP (127.0.0.1), and every other network is refused, including a connection to the Gateway from an IPv6 socket (Java uses those by default: start it with -Djava.net.preferIPv4Stack=true); it is not complete app isolation (system services that connect on its behalf are not covered)",
+                "macOS Seatbelt：App 的程序樹只能以 IPv4 TCP（127.0.0.1）連到所屬代理埠，其他網路一律拒絕，從 IPv6 socket 連代理埠也會被拒絕（Java 預設用這種 socket：啟動時加上 -Djava.net.preferIPv4Stack=true）；不是完整的 App 隔離（系統服務代為連線不在此限）",
+                "macOS Seatbelt：アプリのプロセスツリーは IPv4 の TCP（127.0.0.1）で所属のゲートウェイにだけ接続でき、ほかのネットワークはすべて拒否されます。IPv6 ソケットからゲートウェイへの接続も拒否されます（Java は既定でこのソケットを使うため、-Djava.net.preferIPv4Stack=true を付けて起動してください）。完全なアプリの分離ではありません（システムサービスが代わりに行う接続は対象外です）"
             ),
         ),
         Err(reason) => cap("app_enforced_proxy", CapabilityState::Unsupported, reason),
@@ -352,8 +365,8 @@ mod tests {
 
     use super::*;
 
-    fn pipe() -> (std::io::PipeReader, OwnedFd) {
-        let (r, w) = std::io::pipe().unwrap();
+    fn pipe() -> (io::PipeReader, OwnedFd) {
+        let (r, w) = io::pipe().unwrap();
         (r, OwnedFd::from(w))
     }
 
@@ -365,6 +378,7 @@ mod tests {
                 ("PATH".into(), "/usr/bin:/bin".into()),
                 ("ONLY".into(), "this".into()),
             ],
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir -- test: the working directory of a throw-away test process
             cwd: std::env::temp_dir(),
             output,
             limits: SpawnLimits::default(),
@@ -378,11 +392,10 @@ mod tests {
         // A descriptor of ours that is not close-on-exec must not leak into the App.
         let (leak, _keep) = std::os::unix::net::UnixStream::pair().unwrap();
         let leaked = std::os::fd::AsRawFd::as_raw_fd(&leak);
-        // SAFETY: clearing FD_CLOEXEC on a descriptor this test owns.
-        unsafe {
-            let flags = libc::fcntl(leaked, libc::F_GETFD);
-            libc::fcntl(leaked, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-        }
+        // SAFETY: reading the descriptor flags of a socket this test owns.
+        let flags = unsafe { libc::fcntl(leaked, libc::F_GETFD) };
+        // SAFETY: clearing FD_CLOEXEC on that socket.
+        unsafe { libc::fcntl(leaked, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
         let (mut r, w) = pipe();
         let script = format!(
             "printf '%s|' \"$@\"; echo; env | sort | tr '\\n' ' '; echo; [ -e /dev/fd/{leaked} ] && echo LEAKED; ps -o pgid= -p $$ | tr -d ' '; echo err >&2"

@@ -164,7 +164,7 @@ fn main() -> ExitCode {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("vpnctl: 無法啟動：{e}");
+            output::stderr_line(&format!("vpnctl: 無法啟動：{e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -194,7 +194,7 @@ fn main() -> ExitCode {
             if out.json {
                 out.json(&failure.to_json());
             } else {
-                eprintln!("vpnctl: {}", failure.to_text());
+                output::stderr_line(&format!("vpnctl: {}", failure.to_text()));
             }
             failure.exit()
         }

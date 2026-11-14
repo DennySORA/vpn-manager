@@ -183,7 +183,7 @@ impl Running {
     /// Seal the gate and end every Gateway, all at once: each stops accepting and answers the
     /// HTTP request it has in flight before its connections go.
     async fn end_gateways(&mut self) {
-        let _ = self.tunnel.set_gate(GateState::Sealed);
+        self.tunnel.narrow_gate(GateState::Sealed);
         let mut ending = tokio::task::JoinSet::new();
         for (_, gw, _) in self.gateways.drain(..) {
             ending.spawn(gw.shutdown());
@@ -402,15 +402,17 @@ fn probe_ticker(health: &HealthSettings) -> Interval {
 
 /// Seal, end every forward, listener and Gateway, then the tunnel; `Stopped` on a clean stop.
 async fn teardown(mut running: Running, mut tx: FrameWriter, code: i32) -> i32 {
-    let _ = running.tunnel.set_gate(GateState::Sealed);
+    running.tunnel.narrow_gate(GateState::Sealed);
     running.end_forwards();
     if let Some(server) = running.dns_server.take() {
         server.shutdown().await;
     }
     running.end_gateways().await;
     running.tunnel.shutdown().await;
-    if code == exit::OK {
-        let _ = tx.send(&FromWorker::Stopped, &[]).await;
+    if code == exit::OK
+        && let Err(e) = tx.send(&FromWorker::Stopped, &[]).await
+    {
+        tracing::debug!(error = %e, "Stopped not reported: the manager is gone");
     }
     code
 }
@@ -437,7 +439,7 @@ impl Steady {
             ToWorker::Activate { permit } => return self.activate(permit).await,
             ToWorker::Tighten { reason } => {
                 tracing::info!(%reason, "gate tightened by manager");
-                let _ = running.tunnel.set_gate(GateState::Probe);
+                running.tunnel.narrow_gate(GateState::Probe);
                 running.reconcile_forwards();
             }
             ToWorker::ResetPayload { reason } => {
@@ -446,7 +448,7 @@ impl Steady {
             }
             ToWorker::Seal { reason } => {
                 tracing::warn!(%reason, "sealed by manager");
-                let _ = running.tunnel.set_gate(GateState::Sealed);
+                running.tunnel.narrow_gate(GateState::Sealed);
                 running.end_forwards();
             }
             ToWorker::SetOverlay(overlay) => return self.set_overlay(*overlay).await,
@@ -464,13 +466,15 @@ impl Steady {
             ToWorker::Relay { id } => {
                 let socket = fds.into_iter().next().map(std::net::UdpSocket::from);
                 if let Some(reply) = self.pending_relays.waiting.remove(&id) {
-                    let _ =
-                        reply.send(socket.ok_or_else(|| std::io::Error::other("no relay socket")));
+                    answer_relay(
+                        reply,
+                        socket.ok_or_else(|| std::io::Error::other("no relay socket")),
+                    );
                 }
             }
             ToWorker::RelayFailed { id, message } => {
                 if let Some(reply) = self.pending_relays.waiting.remove(&id) {
-                    let _ = reply.send(Err(std::io::Error::other(message)));
+                    answer_relay(reply, Err(std::io::Error::other(message)));
                 }
             }
             ToWorker::RemoveGateway { id } => {
@@ -506,7 +510,7 @@ impl Steady {
                 }
             }
             ToWorker::Stop { grace_ms } => {
-                let _ = running.tunnel.set_gate(GateState::Probe);
+                running.tunnel.narrow_gate(GateState::Probe);
                 running.end_forwards();
                 tokio::time::sleep(Duration::from_millis(u64::from(grace_ms.min(2000)))).await;
                 return ControlFlow::Break(exit::OK);
@@ -540,7 +544,7 @@ impl Steady {
 
     /// `Start`: gate = probe, then the handshake and the first DNS probe as readiness evidence.
     fn start(&self) {
-        let _ = self.running.tunnel.set_gate(GateState::Probe);
+        self.running.tunnel.narrow_gate(GateState::Probe);
         let t = self.running.tunnel.clone();
         let dns = self.running.dns.clone();
         let timeout =
@@ -569,14 +573,14 @@ impl Steady {
                     .await
                     .and_then(|p| p.endpoint)
                     .ok_or("peer endpoint unknown")?;
-                let _ = itx.send(Internal::Started(Ok(endpoint))).await;
+                notify(&itx, Internal::Started(Ok(endpoint))).await;
                 let p = probe.await.map_err(|e| e.to_string())?;
-                let _ = itx.send(Internal::Probe(p)).await;
+                notify(&itx, Internal::Probe(p)).await;
                 Ok::<_, Text>(())
             }
             .await;
             if let Err(e) = r {
-                let _ = itx.send(Internal::Started(Err(e))).await;
+                notify(&itx, Internal::Started(Err(e))).await;
             }
         });
     }
@@ -771,7 +775,7 @@ impl Steady {
         {
             // Stop admitting new payload; existing flows stay (they can only
             // use the tunnel). Only the manager may re-open.
-            let _ = self.running.tunnel.set_gate(GateState::Probe);
+            self.running.tunnel.narrow_gate(GateState::Probe);
             self.running.reconcile_forwards();
             self.degraded = true;
             self.send(&FromWorker::Degraded {
@@ -794,7 +798,7 @@ impl Steady {
         let itx = self.itx.clone();
         tokio::spawn(async move {
             let r = dns.probe().await;
-            let _ = itx.send(Internal::Probe(r)).await;
+            notify(&itx, Internal::Probe(r)).await;
         });
     }
 
@@ -830,9 +834,10 @@ impl Steady {
         // Forget requests whose Gateway gave up waiting.
         pending.waiting.retain(|_, reply| !reply.is_closed());
         if pending.waiting.len() >= MAX_RELAY_REQUESTS {
-            let _ = request
-                .reply
-                .send(Err(std::io::Error::other("too many relay requests")));
+            answer_relay(
+                request.reply,
+                Err(std::io::Error::other("too many relay requests")),
+            );
             return ControlFlow::Continue(());
         }
         pending.next_id += 1;
@@ -846,16 +851,34 @@ impl Steady {
     }
 }
 
+/// Hand an event of the worker's own tasks to the control loop. Once that loop has ended, the
+/// worker is exiting and nothing waits for the event any more.
+async fn notify(itx: &mpsc::Sender<Internal>, event: Internal) {
+    if itx.send(event).await.is_err() {
+        tracing::trace!("internal event dropped: the control loop has ended");
+    }
+}
+
+/// Answer a strict Gateway's relay-socket request. A Gateway that gave up waiting no longer
+/// listens; the socket of the answer is then closed with it.
+fn answer_relay(
+    reply: oneshot::Sender<std::io::Result<std::net::UdpSocket>>,
+    answer: std::io::Result<std::net::UdpSocket>,
+) {
+    if reply.send(answer).is_err() {
+        tracing::trace!("relay answer dropped: the Gateway stopped waiting");
+    }
+}
+
+/// Report why the worker ends; the exit code says it too, should the manager be gone already.
 async fn fatal(tx: &mut FrameWriter, code: &str, message: impl Into<Text>) {
-    let _ = tx
-        .send(
-            &FromWorker::Fatal {
-                code: code.into(),
-                message: message.into(),
-            },
-            &[],
-        )
-        .await;
+    let fatal = FromWorker::Fatal {
+        code: code.into(),
+        message: message.into(),
+    };
+    if let Err(e) = tx.send(&fatal, &[]).await {
+        tracing::debug!(code, error = %e, "fatal error not reported: the manager is gone");
+    }
 }
 
 type ConfigError = (&'static str, i32, Text);
@@ -948,7 +971,10 @@ fn security(spec: PolicySpec) -> Result<Security, ConfigError> {
 /// The sandbox descriptors of a strict worker, in `Configure` order.
 #[cfg_attr(
     not(target_os = "linux"),
-    allow(dead_code, reason = "only Linux starts a strict worker")
+    expect(
+        dead_code,
+        reason = "only Linux starts a strict worker; elsewhere the descriptors are checked and closed unread"
+    )
 )]
 struct StrictFds {
     tun: OwnedFd,
@@ -1344,6 +1370,10 @@ async fn start_strict(
 }
 
 #[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the signature of the Linux `start_strict`, so its one caller awaits either"
+)]
 async fn start_strict(
     _strict: &StrictWire,
     _fds: StrictFds,
@@ -1422,10 +1452,7 @@ async fn collect_status(r: &Running) -> WorkerStatus {
     let gate = r.tunnel.gate();
     let c = r.tunnel.counters();
     let me = resources::sample_self();
-    let relayed = r
-        .forwards
-        .as_ref()
-        .map_or((0, 0), super::forward::PortController::relayed);
+    let relayed = r.forwards.as_ref().map_or((0, 0), PortController::relayed);
     WorkerStatus {
         generation: r.generation,
         monotonic_ms: u64::try_from(r.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -1487,18 +1514,13 @@ async fn collect_status(r: &Running) -> WorkerStatus {
         transport: Some(transport_status(r)),
         control_flows: Some(r.tunnel.control_flows()),
         probe_flows: Some(r.dns.probes_in_flight()),
-        connector_flows: Some(
-            r.connector
-                .as_ref()
-                .map_or(0, super::connector_socket::ConnectorSocket::active),
-        ),
-        forwards: r
-            .forwards
-            .as_ref()
-            .map_or_default(super::forward::PortController::status),
+        connector_flows: Some(r.connector.as_ref().map_or(0, ConnectorSocket::active)),
+        forwards: r.forwards.as_ref().map_or_default(PortController::status),
         forward_rx_bytes: relayed.0,
         forward_tx_bytes: relayed.1,
         sandbox: c.sandbox,
+        sandbox_ports: r.tunnel.sandbox_ports(),
+        app_payload: Vec::new(),
     }
 }
 

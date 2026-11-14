@@ -24,6 +24,7 @@ const MAX_LINE: usize = 2000;
 const TAIL_WINDOW: u64 = 256 * 1024;
 
 /// The reading side of an App's output.
+#[derive(Debug)]
 pub struct LogPump {
     reader: OwnedFd,
     path: PathBuf,
@@ -73,8 +74,11 @@ impl Sink {
             && logfiles::is_full(&e)
             && logfiles::drop_oldest(&self.path)
         {
-            // Written once more, in the room the oldest output left.
-            let _ = self.try_write(data);
+            // Written once more, in the room the oldest output left; what still does not fit is
+            // dropped.
+            if let Err(e) = self.try_write(data) {
+                tracing::trace!(error = %e, log = %self.path.display(), "app output dropped");
+            }
         }
     }
 
@@ -155,7 +159,7 @@ impl LogPump {
 ///
 /// # Errors
 ///
-/// Fails when a log file exists but cannot be opened (including a symlink), read or seeked.
+/// Fails when a log file exists but cannot be opened (including a symlink), read or repositioned.
 pub fn tail(path: &Path, max: usize) -> io::Result<(Vec<String>, bool)> {
     let (mut lines, mut more) = tail_of(path, max)?;
     if lines.len() < max {

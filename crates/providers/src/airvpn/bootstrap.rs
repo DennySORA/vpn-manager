@@ -52,6 +52,10 @@ fn sealing() -> ProviderError {
 }
 
 /// The pinned key in the form aws-lc-rs reads.
+#[expect(
+    clippy::expect_used,
+    reason = "RSA_MODULUS and RSA_EXPONENT are constants of a valid RSA-4096 key (`the_pinned_key_is_airvpns_rsa_4096`): none of these steps can fail"
+)]
 pub fn pinned_key() -> PublicEncryptingKey {
     let modulus = B64
         .decode(RSA_MODULUS)
@@ -97,7 +101,12 @@ pub async fn fetch<C: Connect, T>(
             _ => error,
         });
     }
-    Err(failure.expect("BOOTSTRAP_IPS is not empty"))
+    #[expect(
+        clippy::expect_used,
+        reason = "BOOTSTRAP_IPS is a non-empty constant, and an address that does not return sets `failure`"
+    )]
+    let failure = failure.expect("BOOTSTRAP_IPS is not empty");
+    Err(failure)
 }
 
 /// A decrypted answer in the buffer it was decrypted in; zeroized on drop (it carries the
@@ -144,7 +153,8 @@ async fn attempt<C: Connect>(
     *request.method_mut() = Method::POST;
     *request.uri_mut() = Uri::from_static("/");
     let headers = request.headers_mut();
-    let authority = HeaderValue::from_str(&host).map_err(|_| HttpError::InvalidRequest)?;
+    let authority =
+        HeaderValue::from_str(&host).map_err(|_invalid_header| HttpError::InvalidRequest)?;
     headers.insert(header::HOST, authority);
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(FORM));
     headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
@@ -233,9 +243,14 @@ fn assoc(pairs: &[(&str, &[u8])], room: usize) -> Zeroizing<Vec<u8>> {
     let mut at = 0;
     for (name, value) in pairs {
         for (part, end) in [(name.as_bytes(), b':'), (*value, b'\n')] {
-            at += B64
+            #[expect(
+                clippy::expect_used,
+                reason = "`out` is sized with `encoded_len` of every part, so each encoding fits what is left of it"
+            )]
+            let written = B64
                 .encode_slice(part, &mut out[at..])
                 .expect("sized with encoded_len");
+            at += written;
             out[at] = end;
             at += 1;
         }

@@ -2,6 +2,8 @@
 //! connection or resolves a name by itself. Every provider byte goes through a relay socket of
 //! the manager. Checked on the source, so a new dial cannot slip in unnoticed.
 
+#![cfg(test)]
+
 use std::path::Path;
 
 /// Calls that would reach the network (or the host resolver) directly.

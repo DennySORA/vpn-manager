@@ -192,27 +192,32 @@ mod other {
     };
 
     /// A strict sandbox (never constructed on this operating system).
+    #[derive(Debug)]
     pub struct SandboxLease {
         never: Infallible,
     }
 
     /// A process in a sandbox (never constructed on this operating system).
+    #[derive(Debug)]
     pub struct SandboxProcess {
         never: Infallible,
     }
 
     /// Namespaces a worker joins (never constructed on this operating system).
+    #[derive(Debug)]
     pub struct WorkerEntry {
         _never: Infallible,
     }
 
     /// What managed Apps need to enter a sandbox (never constructed on this operating system).
+    #[derive(Debug)]
     pub struct AppEntry {
         never: Infallible,
     }
 
     /// The manager's end of a sandboxed App's access relay (never constructed on this operating
     /// system).
+    #[derive(Debug)]
     pub struct AccessChannel {
         never: Infallible,
     }
@@ -252,6 +257,7 @@ mod other {
     }
 
     /// A non-managing connection to a sandbox (never constructed on this operating system).
+    #[derive(Debug)]
     pub struct SandboxClient {
         never: Infallible,
     }
@@ -542,6 +548,10 @@ mod other {
         #[expect(
             clippy::unused_async,
             reason = "same signature as on Linux, where it waits until the App's tree has ended"
+        )]
+        #[expect(
+            clippy::needless_pass_by_ref_mut,
+            reason = "same signature as on Linux, where it records the App's exit status"
         )]
         pub async fn wait(&mut self) -> Option<ExitStatus> {
             match self.never {}

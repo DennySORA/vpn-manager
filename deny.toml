@@ -11,6 +11,7 @@ all-features = true
 # here with the advisory ID and the reason it does not apply.
 yanked = "deny"
 unmaintained = "all"
+unsound = "all"
 
 [licenses]
 confidence-threshold = 0.93
@@ -45,8 +46,73 @@ highlight = "all"
 # named here.
 deny = [{ crate = "parking_lot:>=0.13.0", wrappers = ["vpn-sync"] }]
 
+# Executables (ELF, PE, Mach-O) in a crate's sources fail, and only the crates below may run a build
+# script. Read on 2026-11-14: none reaches the network or runs a shell; they compile C (aws-lc-sys,
+# libsqlite3-sys, ring), probe the compiler or the target (anyhow, proc-macro2, rustversion, libc,
+# ...) or generate tables (icu_*, mime_guess, oid-registry); wasm-bindgen-shared runs `git rev-parse`
+# and is built only for wasm targets. Named without versions, so an update needs no new entry; a
+# crate that newly brings a build script fails until it is read and named here.
+[bans.build]
+executables = "deny"
+allow-build-scripts = [
+    "anyhow",
+    "aws-lc-rs",
+    "aws-lc-sys",
+    "crossbeam-utils",
+    "curve25519-dalek",
+    "defmt",
+    "defmt-macros",
+    "eyre",
+    "generic-array",
+    "getrandom",
+    "heapless",
+    "httparse",
+    "iana-time-zone-haiku",
+    "icu_normalizer_data",
+    "icu_properties_data",
+    "jni",
+    "jni-macros",
+    "libc",
+    "libsqlite3-sys",
+    "memoffset",
+    "mime_guess",
+    "nix",
+    "num-traits",
+    "oid-registry",
+    "parking_lot_core",
+    "portable-atomic",
+    "proc-macro2",
+    "quote",
+    "ring",
+    "rustix",
+    "rustls",
+    "rustversion",
+    "serde",
+    "serde_core",
+    "serde_json",
+    "smoltcp",
+    "sqlite-wasm-rs",
+    "thiserror",
+    "valuable",
+    "wasm-bindgen",
+    "wasm-bindgen-shared",
+    "windows_aarch64_gnullvm",
+    "windows_aarch64_msvc",
+    "windows_i686_gnu",
+    "windows_i686_gnullvm",
+    "windows_i686_msvc",
+    "windows_x86_64_gnu",
+    "windows_x86_64_gnullvm",
+    "windows_x86_64_msvc",
+    "wit-bindgen",
+    "zerocopy",
+    "zmij",
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# A git source, if one is ever added, names an exact commit.
+required-git-spec = "rev"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []

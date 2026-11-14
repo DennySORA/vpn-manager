@@ -76,6 +76,15 @@ pub struct Performance {
     persist: Mutex<sampler::PersistQueue>,
 }
 
+impl std::fmt::Debug for Performance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Performance")
+            .field("started_ms", &self.started_ms)
+            .field("boot_id", &self.boot_id)
+            .finish_non_exhaustive()
+    }
+}
+
 fn now_ms() -> i64 {
     Timestamp::now().unix_millis()
 }
@@ -139,6 +148,7 @@ fn point_of(s: &WorkerStatus, at_ms: i64) -> WorkerPoint {
 }
 
 /// Keeps a controller registered while its connection lives.
+#[derive(Debug)]
 pub struct ControllerGuard {
     perf: Arc<Performance>,
     identity: ProcessIdentity,
@@ -405,7 +415,7 @@ impl Performance {
             self.store.resources_query(from, now, minute),
         )
         .await
-        .map_err(|_| timed_out())?
+        .map_err(|_elapsed| timed_out())?
         .map_err(|e| e.to_api())?;
         let input = role_input(q.data);
         let gaps: Vec<(i64, i64, MetricsGapReason)> = q

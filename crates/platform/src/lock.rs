@@ -3,7 +3,7 @@
 //! The kernel releases them when the holding process dies, which makes a successfully acquired lock
 //! proof that no previous holder is alive — even one that was re-parented away from a crashed
 //! manager.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "the single-instance lock calls flock(2) via libc"
 )]
@@ -13,6 +13,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+#[derive(Debug)]
 pub struct FileLock {
     _file: File,
 }

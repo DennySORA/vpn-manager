@@ -69,13 +69,14 @@ impl Exposure {
     }
 }
 
+#[derive(Debug)]
 pub struct ControllerConfig {
     /// Port of the web UI and API.
     pub port: u16,
     /// Where it listens, and for whom besides this host's programs.
     pub exposure: Exposure,
     /// The installation's directory (shown to the user; never read here).
-    pub data_dir: Option<std::path::PathBuf>,
+    pub data_dir: Option<PathBuf>,
     pub manager_socket: PathBuf,
     /// UDS for `vpnctl` (same API, no browser guard; 0600 in a 0700 directory).
     pub api_socket: Option<PathBuf>,
@@ -103,7 +104,7 @@ const DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// serving fails.
 pub async fn run(
     cfg: ControllerConfig,
-    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let hub = Hub::new();
     let closing_hub = hub.clone();
@@ -176,9 +177,12 @@ pub async fn run(
         let t = token.clone();
         tracing::info!(path = %sock.display(), "API socket listening");
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app)
+            if let Err(e) = axum::serve(listener, app)
                 .with_graceful_shutdown(async move { t.cancelled().await })
-                .await;
+                .await
+            {
+                tracing::warn!(error = %e, "API socket stopped serving");
+            }
         });
     }
     let t = token.clone();

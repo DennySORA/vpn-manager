@@ -16,7 +16,7 @@
 //! burst of traffic, on Unix sockets too): a frame waits that out instead of ending the
 //! connection, which would end the worker or the manager link with it.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the sendmsg/recvmsg SCM_RIGHTS boundary: msghdr, iovec and cmsg handling through libc"
 )]
@@ -93,21 +93,24 @@ pub fn encode<T: Serialize>(msg: &T, fd_count: usize, max: usize) -> io::Result<
     if len > max {
         return Err(proto_err("frame exceeds the size limit"));
     }
-    let len = u32::try_from(len).map_err(|_| proto_err("frame exceeds the size limit"))?;
-    let fd_count =
-        u8::try_from(fd_count).map_err(|_| proto_err("too many file descriptors in one frame"))?;
+    // A `TryFromIntError` says only "out of range", which each message states.
+    let len = u32::try_from(len).map_err(|_over_u32| proto_err("frame exceeds the size limit"))?;
+    let fd_count = u8::try_from(fd_count)
+        .map_err(|_over_u8| proto_err("too many file descriptors in one frame"))?;
     out[..4].copy_from_slice(&len.to_be_bytes());
     out[4] = fd_count;
     Ok(out)
 }
 
 /// Write half: sends frames, with descriptors attached via `sendmsg`.
+#[derive(Debug)]
 pub struct FrameWriter {
     half: OwnedWriteHalf,
     max: usize,
 }
 
 /// Read half: buffers bytes and received descriptors.
+#[derive(Debug)]
 pub struct FrameReader {
     half: OwnedReadHalf,
     buf: BytesMut,
@@ -155,6 +158,10 @@ impl FrameWriter {
     #[expect(
         clippy::future_not_send,
         reason = "generic over the message: the future is Send whenever T is Sync, as every caller's message type is"
+    )]
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "the exclusive borrow keeps a second send from interleaving with a frame that goes out in several sendmsg calls"
     )]
     pub async fn send<T: Serialize>(&mut self, msg: &T, fds: &[BorrowedFd<'_>]) -> io::Result<()> {
         let frame = encode(msg, fds.len(), self.max)?;
@@ -262,22 +269,32 @@ impl FrameReader {
     }
 }
 
+/// A zeroed buffer for control messages, at least `bytes` long and aligned for `cmsghdr`: the
+/// headers in it are read and written in place (here and inside the `CMSG_*` helpers), which needs
+/// that alignment and a `Vec<u8>` does not promise it.
+fn control_buffer(bytes: usize) -> Vec<libc::cmsghdr> {
+    // SAFETY: a `cmsghdr` holds only integers, for which all zeros is a valid value.
+    let zero: libc::cmsghdr = unsafe { std::mem::zeroed() };
+    vec![zero; bytes.div_ceil(size_of::<libc::cmsghdr>())]
+}
+
 fn send_with_fds(fd: RawFd, data: &[u8], fds: &[BorrowedFd<'_>]) -> io::Result<usize> {
     let mut iov = libc::iovec {
         iov_base: data.as_ptr().cast_mut().cast::<libc::c_void>(),
         iov_len: data.len(),
     };
-    let raw: Vec<RawFd> = fds.iter().map(std::os::fd::AsRawFd::as_raw_fd).collect();
-    let fd_bytes = std::mem::size_of_val(raw.as_slice());
-    let fd_bytes_u32 =
-        u32::try_from(fd_bytes).map_err(|_| proto_err("too many file descriptors in one frame"))?;
-    // SAFETY: CMSG_SPACE is a pure size computation.
+    let raw: Vec<RawFd> = fds.iter().map(AsRawFd::as_raw_fd).collect();
+    let fd_bytes = size_of_val(raw.as_slice());
+    // A `TryFromIntError` says only "out of range", which the message states.
+    let fd_bytes_u32 = u32::try_from(fd_bytes)
+        .map_err(|_over_u32| proto_err("too many file descriptors in one frame"))?;
     let space = if raw.is_empty() {
         0
     } else {
+        // SAFETY: CMSG_SPACE is a pure size computation.
         unsafe { libc::CMSG_SPACE(fd_bytes_u32) }
     };
-    let mut control = vec![0u8; space as usize];
+    let mut control = control_buffer(space as usize);
     // SAFETY: zero-initialised msghdr is valid; all pointers below point into live buffers that
     // outlive the sendmsg call.
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
@@ -286,18 +303,23 @@ fn send_with_fds(fd: RawFd, data: &[u8], fds: &[BorrowedFd<'_>]) -> io::Result<u
     if !raw.is_empty() {
         msg.msg_control = control.as_mut_ptr().cast::<libc::c_void>();
         msg.msg_controllen = space as _;
-        // SAFETY: control has CMSG_SPACE(fd_bytes) bytes, so the first header and its data fit.
-        unsafe {
-            let cmsg = libc::CMSG_FIRSTHDR(&raw const msg);
-            (*cmsg).cmsg_level = libc::SOL_SOCKET;
-            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len = libc::CMSG_LEN(fd_bytes_u32) as _;
-            std::ptr::copy_nonoverlapping(
-                raw.as_ptr().cast::<u8>(),
-                libc::CMSG_DATA(cmsg),
-                fd_bytes,
-            );
-        }
+        // SAFETY: `msg` is a live msghdr; CMSG_FIRSTHDR reads only its control pointer and length.
+        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&raw const msg) };
+        // SAFETY: CMSG_LEN is a pure size computation.
+        let cmsg_len = unsafe { libc::CMSG_LEN(fd_bytes_u32) };
+        // SAFETY: the control length, CMSG_SPACE(fd_bytes), is more than one header, so `cmsg` is
+        // the start of `control`: live, aligned for `cmsghdr`, and reached through no other
+        // reference while `header` lives.
+        let header = unsafe { &mut *cmsg };
+        header.cmsg_level = libc::SOL_SOCKET;
+        header.cmsg_type = libc::SCM_RIGHTS;
+        header.cmsg_len = cmsg_len as _;
+        // SAFETY: `cmsg` is the first header in `control`; CMSG_DATA steps just past it, inside
+        // the CMSG_SPACE(fd_bytes) bytes of `control`.
+        let fd_data = unsafe { libc::CMSG_DATA(cmsg) };
+        // SAFETY: control has CMSG_SPACE(fd_bytes) bytes, so the first header and its `fd_bytes`
+        // of data fit; `raw` is a separate live buffer of exactly `fd_bytes` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(raw.as_ptr().cast::<u8>(), fd_data, fd_bytes) };
     }
     #[cfg(target_os = "linux")]
     let flags = libc::MSG_NOSIGNAL;
@@ -317,11 +339,12 @@ fn recv_with_fds(fd: RawFd, buf: &mut [u8]) -> io::Result<(usize, Vec<OwnedFd>)>
         iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
         iov_len: buf.len(),
     };
-    let max_fd_bytes = u32::try_from(MAX_FDS * std::mem::size_of::<RawFd>())
-        .map_err(|_| proto_err("descriptor buffer exceeds u32"))?;
+    // A `TryFromIntError` says only "out of range", which the message states.
+    let max_fd_bytes = u32::try_from(MAX_FDS * size_of::<RawFd>())
+        .map_err(|_over_u32| proto_err("descriptor buffer exceeds u32"))?;
     // SAFETY: pure size computation.
     let space = unsafe { libc::CMSG_SPACE(max_fd_bytes) };
-    let mut control = vec![0u8; space as usize];
+    let mut control = control_buffer(space as usize);
     // SAFETY: zero-initialised msghdr is valid; buffers outlive the call.
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &raw mut iov;
@@ -338,28 +361,38 @@ fn recv_with_fds(fd: RawFd, buf: &mut [u8]) -> io::Result<(usize, Vec<OwnedFd>)>
         return Err(io::Error::last_os_error());
     }
     let mut fds = Vec::new();
-    // SAFETY: iterating the control buffer the kernel just filled, bounded by msg_controllen.
-    unsafe {
-        let mut cmsg = libc::CMSG_FIRSTHDR(&raw const msg);
-        while !cmsg.is_null() {
-            if (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_RIGHTS {
-                let data = libc::CMSG_DATA(cmsg);
-                let len = (*cmsg).cmsg_len as usize - (data as usize - cmsg as usize);
-                let count = len / std::mem::size_of::<RawFd>();
-                for i in 0..count {
-                    #[expect(
-                        clippy::cast_ptr_alignment,
-                        reason = "cmsg data may be unaligned; it is read with read_unaligned"
-                    )]
-                    let raw = std::ptr::read_unaligned((data as *const RawFd).add(i));
-                    let owned = OwnedFd::from_raw_fd(raw);
-                    #[cfg(not(target_os = "linux"))]
-                    libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
-                    fds.push(owned);
-                }
+    // Iterating the control buffer the kernel just filled, bounded by msg_controllen.
+    // SAFETY: `msg` is a live msghdr; CMSG_FIRSTHDR reads only its control pointer and length.
+    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&raw const msg) };
+    while !cmsg.is_null() {
+        // SAFETY: a non-null header from CMSG_FIRSTHDR or CMSG_NXTHDR lies whole inside the
+        // msg_controllen bytes of `control` the kernel filled, at an aligned offset of a buffer
+        // aligned for `cmsghdr`; nothing writes `control` while `header` lives.
+        let header = unsafe { &*cmsg };
+        if header.cmsg_level == libc::SOL_SOCKET && header.cmsg_type == libc::SCM_RIGHTS {
+            // SAFETY: `cmsg` is a header inside `control`; CMSG_DATA steps just past it.
+            let data = unsafe { libc::CMSG_DATA(cmsg) };
+            let len = header.cmsg_len as usize - (data as usize - cmsg as usize);
+            // SAFETY: the header's data (`cmsg_len` minus the header) lies inside the bytes of
+            // `control` the kernel just wrote, and nothing writes them while `bytes` lives.
+            let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+            // The descriptors, read byte-wise: cmsg data need not be aligned for them.
+            for raw in bytes.as_chunks::<{ size_of::<RawFd>() }>().0 {
+                // SAFETY: the kernel installed this descriptor in this process for this message
+                // (SCM_RIGHTS) and nothing else owns it, so `owned` is its only owner.
+                let owned = unsafe { OwnedFd::from_raw_fd(RawFd::from_ne_bytes(*raw)) };
+                #[cfg(not(target_os = "linux"))]
+                // SAFETY: `owned` is an open descriptor; F_SETFD with FD_CLOEXEC changes only its
+                // close-on-exec flag.
+                unsafe {
+                    libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC)
+                };
+                fds.push(owned);
             }
-            cmsg = libc::CMSG_NXTHDR(&raw const msg, cmsg);
         }
+        // SAFETY: `msg` is live and `cmsg` is one of its headers; CMSG_NXTHDR returns the next
+        // header inside msg_controllen, or null.
+        cmsg = unsafe { libc::CMSG_NXTHDR(&raw const msg, cmsg) };
     }
     if msg.msg_flags & libc::MSG_CTRUNC != 0 {
         // Descriptors were dropped by the kernel; the stream can no longer be trusted.

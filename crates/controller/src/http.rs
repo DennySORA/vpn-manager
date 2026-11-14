@@ -65,6 +65,7 @@ pub fn report_error(report: &ValidationReport) -> HttpError {
 
 /// JSON body extractor whose rejections are public `ApiError`s in the three languages (no serde
 /// internals).
+#[derive(Debug)]
 pub struct ApiJson<T>(pub T);
 
 impl<S, T> FromRequest<S> for ApiJson<T>
@@ -136,6 +137,7 @@ fn unreadable() -> Text {
 
 /// A request body within the route's limit; going over it is a public `PAYLOAD_TOO_LARGE`
 /// error (not the framework's plain-text answer).
+#[derive(Debug)]
 pub struct LimitedBody(pub axum::body::Bytes);
 
 impl<S> FromRequest<S> for LimitedBody
@@ -185,7 +187,8 @@ pub fn idempotency_key(headers: &HeaderMap) -> HttpResult<String> {
                 ),
             )
         })?;
-    let parsed = uuid::Uuid::parse_str(v.trim()).map_err(|_| {
+    let parsed = uuid::Uuid::parse_str(v.trim()).map_err(|e| {
+        tracing::debug!(error = %e, "Idempotency-Key refused");
         bad(
             ErrorCode::InvalidRequest,
             tr!(
@@ -221,8 +224,9 @@ pub fn if_match(headers: &HeaderMap) -> HttpResult<u64> {
     v.trim()
         .trim_start_matches("W/")
         .trim_matches('"')
-        .parse()
-        .map_err(|_| {
+        .parse::<u64>()
+        .map_err(|e| {
+            tracing::debug!(error = %e, "If-Match refused");
             bad(
                 ErrorCode::InvalidRequest,
                 tr!(

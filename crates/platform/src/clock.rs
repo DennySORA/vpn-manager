@@ -5,9 +5,12 @@
 //! `timedatectl` shows as "System clock synchronized"): an NTP client (systemd-timesyncd, chrony,
 //! ntpd) keeps it small; without one it grows by 0.5 ms a second, and the kernel marks the clock
 //! unsynchronized at 16 s, where it also starts at boot. Elsewhere it cannot be told.
-#![allow(
-    unsafe_code,
-    reason = "reading the kernel's clock discipline calls adjtimex via libc"
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        unsafe_code,
+        reason = "reading the kernel's clock discipline calls adjtimex via libc"
+    )
 )]
 
 /// The kernel's ceiling for the clock's maximum error (`NTP_PHASE_LIMIT`, in µs): there the clock

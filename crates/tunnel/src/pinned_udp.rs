@@ -99,6 +99,7 @@ impl UnderlayStats {
 }
 
 /// [`UdpTransportFactory`] enforcing a [`PeerPolicy`].
+#[derive(Debug)]
 pub struct PinnedUdpFactory {
     source: UdpSource,
     policy: Arc<RwLock<PeerPolicy>>,
@@ -176,7 +177,7 @@ async fn bind_again(addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
 }
 
 /// One bound underlay socket.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PinnedUdpSocket {
     socket: Arc<tokio::net::UdpSocket>,
     policy: Arc<RwLock<PeerPolicy>>,

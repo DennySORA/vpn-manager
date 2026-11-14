@@ -4,10 +4,7 @@
 //! loopback and TEST-NET-1 (192.0.2.1, never routed); the "private" file is a fake in the test's
 //! own state directory.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
@@ -106,7 +103,7 @@ async fn lab(paths: &Paths, port: u16) -> Lab {
                 purpose: InstancePurpose::General,
                 limits: InstanceLimits::default(),
                 strict: false,
-                transport: vpn_domain::TransportRef::default(),
+                transport: TransportRef::default(),
             })
             .await
             .unwrap();
@@ -146,7 +143,7 @@ impl Lab {
             instance_id: self.instance,
             name: "probe".into(),
             executable: executable.into(),
-            args: args.iter().map(std::string::ToString::to_string).collect(),
+            args: args.iter().map(ToString::to_string).collect(),
             working_dir: None,
             env: vec![EnvVar {
                 name: "PROBE".into(),
@@ -204,7 +201,10 @@ impl Lab {
 
     /// Stop and delete, removing the App's private directories (some live in /private/tmp).
     async fn remove(&self, app: &AppSpec) {
-        let _ = self.act(app.id, AppAction::Stop).await;
+        // A stop that fails leaves the App running: the delete below then says so.
+        if let Err(e) = self.act(app.id, AppAction::Stop).await {
+            eprintln!("stop before the delete: {e}");
+        }
         let rev = self
             .store
             .get::<AppSpec>(app.id.to_string())
@@ -431,6 +431,8 @@ fn lan_ip() -> Option<std::net::IpAddr> {
 #[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_enforced_app_holding_a_connection_from_the_network_is_stopped() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let Some(lan) = lan_ip() else {
         eprintln!("no non-loopback address on this host: skipped");
         return;
@@ -461,7 +463,6 @@ async fn an_enforced_app_holding_a_connection_from_the_network_is_stopped() {
         tokio::time::sleep(Duration::from_millis(2)).await;
     };
     // The channel works both ways (what Seatbelt allows).
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     conn.write_all(b"in\n").await.unwrap();
     let mut got = [0u8; 4];
     tokio::time::timeout(Duration::from_secs(5), conn.read_exact(&mut got))
@@ -482,25 +483,12 @@ async fn an_enforced_app_holding_a_connection_from_the_network_is_stopped() {
             why.message.zh_tw
         ),
         "APP_LISTENER_NOT_LOOPBACK" => {}
-        other => panic!("{other}: {}", why.message),
+        other => panic!("{other}: {}", why.message.zh_tw),
     }
     assert!(proc::info(started.pid.unwrap()).is_none_or(|i| i.zombie));
     assert_eq!(s.desired, DesiredState::Running);
     drop(conn);
     lab.remove(&app).await;
-}
-
-/// Wait (bounded) until `p` is gone; whether it went.
-#[cfg(target_os = "macos")]
-async fn gone(p: proc::ProcessIdentity, within: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + within;
-    while proc::is_alive(p) {
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    true
 }
 
 /// The recovery report lists a running App's tree among the manager's own resources, never as

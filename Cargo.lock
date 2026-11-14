@@ -3715,7 +3715,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vpn-controller"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3755,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-domain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "hex",
@@ -3772,7 +3772,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-installer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3790,7 +3790,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-instance"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "hickory-proto",
@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-instance-manager"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "hex",
@@ -3853,7 +3853,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-ipc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-labpeer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3894,14 +3894,14 @@ dependencies = [
 
 [[package]]
 name = "vpn-performance"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "vpn-domain",
 ]
 
 [[package]]
 name = "vpn-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "ipnetwork",
@@ -3921,7 +3921,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-providers"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -3950,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-ssh"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "libc",
@@ -3967,7 +3967,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-ssh-download"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "libc",
@@ -3989,7 +3989,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chacha20poly1305 0.11.0",
  "crossbeam-channel",
@@ -4013,14 +4013,14 @@ dependencies = [
 
 [[package]]
 name = "vpn-sync"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "parking_lot 0.13.0",
 ]
 
 [[package]]
 name = "vpn-tunnel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "crossbeam-queue",
@@ -4039,7 +4039,7 @@ dependencies = [
 
 [[package]]
 name = "vpn-web-provide"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "mime_guess",
@@ -4048,7 +4048,7 @@ dependencies = [
 
 [[package]]
 name = "vpnctl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "http-body-util",
@@ -4068,7 +4068,7 @@ dependencies = [
 
 [[package]]
 name = "vpnd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",

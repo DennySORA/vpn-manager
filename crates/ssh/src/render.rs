@@ -130,6 +130,7 @@ fn plain_pattern(p: &str) -> bool {
 }
 
 /// One host to render.
+#[derive(Debug)]
 pub struct Entry<'a> {
     pub host: &'a SshHost,
     /// Every name the block is written for.
@@ -165,6 +166,16 @@ impl<'a> Entry<'a> {
     }
 }
 
+/// Append to the file being rendered. Writing into a `String` cannot fail: its `fmt::Write`
+/// returns no error, and what is written here are strings and numbers.
+fn put(out: &mut String, text: std::fmt::Arguments<'_>) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "fmt::Write for String never returns an error"
+    )]
+    let _ = out.write_fmt(text);
+}
+
 /// Render the file. An entry that wants a Gateway without a known port or routing is an error:
 /// written without its `ProxyCommand` it would connect directly.
 ///
@@ -177,19 +188,19 @@ pub fn render(entries: &[Entry<'_>], routing: Option<&Routing>) -> Result<String
     let mut out = String::from(HEADER);
     for e in sorted {
         let h = e.host;
-        let _ = write!(out, "\nHost {}\n", e.patterns.join(" "));
+        put(&mut out, format_args!("\nHost {}\n", e.patterns.join(" ")));
         if h.kind == SshHostKind::Host {
             if let Some(v) = &h.host_name {
-                let _ = writeln!(out, "  HostName {v}");
+                put(&mut out, format_args!("  HostName {v}\n"));
             }
             if let Some(v) = &h.user {
-                let _ = writeln!(out, "  User {v}");
+                put(&mut out, format_args!("  User {v}\n"));
             }
             if let Some(v) = h.port {
-                let _ = writeln!(out, "  Port {v}");
+                put(&mut out, format_args!("  Port {v}\n"));
             }
             if let Some(v) = &h.identity_file {
-                let _ = writeln!(out, "  IdentityFile {v}");
+                put(&mut out, format_args!("  IdentityFile {v}\n"));
                 if h.identities_only {
                     out.push_str("  IdentitiesOnly yes\n");
                 }
@@ -204,11 +215,17 @@ pub fn render(entries: &[Entry<'_>], routing: Option<&Routing>) -> Result<String
                     "「{alias}」はゲートウェイ経由で接続する必要がありますが、ProxyCommand を生成できません"
                 ));
             };
-            let _ = writeln!(out, "  ProxyCommand {}", r.proxy_command(port));
-            let _ = writeln!(out, "  ControlPath {}", r.control_path(port));
+            put(
+                &mut out,
+                format_args!("  ProxyCommand {}\n", r.proxy_command(port)),
+            );
+            put(
+                &mut out,
+                format_args!("  ControlPath {}\n", r.control_path(port)),
+            );
         }
         if let Some(v) = h.server_alive_interval {
-            let _ = writeln!(out, "  ServerAliveInterval {v}");
+            put(&mut out, format_args!("  ServerAliveInterval {v}\n"));
         }
     }
     Ok(out)

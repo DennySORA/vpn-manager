@@ -593,7 +593,10 @@ async fn add(ctx: &Ctx, provider: AccountProvider, label: Option<String>) -> Cmd
         _ => return Err(Failure::Usage("沒有輸入憑證，沒有送出".into())),
     };
     if crate::prompt::stdin_is_terminal() {
-        eprintln!("經 Provider 出口向 {} 驗證中…", provider_name(kind));
+        crate::output::stderr_line(&format!(
+            "經 Provider 出口向 {} 驗證中…",
+            provider_name(kind)
+        ));
     }
     let body = AccountBody { label, credential };
     let done: Mutation<ProviderAccount> = ctx
@@ -893,7 +896,9 @@ async fn edit_port(ctx: &Ctx, e: PortEdit) -> CmdResult {
 async fn test_port(ctx: &Ctx, account: &str, port: u16) -> CmdResult {
     let a = airvpn_account(ctx, account).await?;
     if crate::prompt::stdin_is_terminal() {
-        eprintln!("請 AirVPN 從伺服器測試連入埠 {port}（每條連線最多約 15 秒）…");
+        crate::output::stderr_line(&format!(
+            "請 AirVPN 從伺服器測試連入埠 {port}（每條連線最多約 15 秒）…"
+        ));
     }
     let t: ForwardedPortTest = ctx
         .client

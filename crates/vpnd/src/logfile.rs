@@ -15,9 +15,8 @@
 //! ([`vpn_platform::logfiles::drop_oldest`]) — and is written again; the next line written after
 //! a loss says how many were lost.
 
-#![allow(unsafe_code, reason = "dup2 FFI that points stderr at the log file")]
+#![expect(unsafe_code, reason = "dup2 FFI that points stderr at the log file")]
 
-use std::fmt::Write as _;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -49,6 +48,10 @@ static UNCHECKED: AtomicU64 = AtomicU64::new(0);
 /// Send stderr to `path` from now on and keep the file below [`LIMIT`].
 pub fn redirect(path: &Path) -> io::Result<()> {
     check(path, STDERR, LIMIT, true)?;
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "cannot fail: `main` redirects stderr only once, at start-up, so the cell is still empty here"
+    )]
     let _ = PATH.set(path.to_path_buf());
     let path = path.to_path_buf();
     std::thread::Builder::new()
@@ -58,8 +61,7 @@ pub fn redirect(path: &Path) -> io::Result<()> {
                 std::thread::sleep(CHECK_EVERY);
                 // Never in the middle of a line (the writer rotates under the same lock).
                 let _lines = io::stderr().lock();
-                // There is nowhere else to report a failure; the next round tries again.
-                let _ = check(&path, STDERR, LIMIT, false);
+                recheck(&path);
             }
         })?;
     Ok(())
@@ -73,6 +75,10 @@ fn check(path: &Path, fd: RawFd, limit: u64, force: bool) -> io::Result<()> {
             let previous = logfiles::backup(path);
             // A worker may still write to the file it replaces: emptied, its blocks are freed
             // now rather than when that worker ends.
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "best effort: the rename below replaces the previous file either way (before the first rotation there is none)"
+            )]
             let _ = logfiles::empty(&previous);
             fs::rename(path, previous)?;
             true
@@ -85,6 +91,16 @@ fn check(path: &Path, fd: RawFd, limit: u64, force: bool) -> io::Result<()> {
         open_onto(path, fd)?;
     }
     Ok(())
+}
+
+/// A routine [`check`]: the periodic one, or the writer's after every [`CHECK_BYTES`]. A failure
+/// has nowhere else to be reported, and the next check tries again.
+fn recheck(path: &Path) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a failed check leaves stderr on the file it has, so lines are still written; the log it would be reported to is the file that failed"
+    )]
+    let _ = check(path, STDERR, LIMIT, false);
 }
 
 fn open_onto(path: &Path, fd: RawFd) -> io::Result<()> {
@@ -140,8 +156,14 @@ impl Write for Line {
 /// A line of our own in the log, formatted like tracing's.
 fn note(text: &str) -> String {
     let mut line = String::new();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "cannot fail: the timestamp is written into a `String`, whose writes always succeed"
+    )]
     let _ = SystemTime.format_time(&mut tracing_subscriber::fmt::format::Writer::new(&mut line));
-    let _ = writeln!(line, "  WARN vpnd::logfile: {text}");
+    line.push_str("  WARN vpnd::logfile: ");
+    line.push_str(text);
+    line.push('\n');
     line
 }
 
@@ -171,7 +193,7 @@ fn put(line: &[u8]) {
         && UNCHECKED.fetch_add(line.len() as u64, Ordering::Relaxed) >= CHECK_BYTES
     {
         UNCHECKED.store(0, Ordering::Relaxed);
-        let _ = check(path, STDERR, LIMIT, false);
+        recheck(path);
     }
     let mut room_made = false;
     loop {

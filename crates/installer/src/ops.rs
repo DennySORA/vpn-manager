@@ -13,7 +13,7 @@
 //! - Uninstall removes the services and programs; data, the vault key, logs and backups stay
 //!   unless `--purge`.
 
-#![allow(unsafe_code, reason = "getuid to refuse running as root")]
+#![expect(unsafe_code, reason = "getuid to refuse running as root")]
 
 use std::fs;
 use std::net::IpAddr;
@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use ipnetwork::IpNetwork;
-use vpn_platform::lock::FileLock;
+use vpn_platform::lock::{FileLock, LockError};
 use vpn_platform::paths::ensure_private_dir;
 
 use crate::fsx::{self, check_path, remove_dir_if_present, remove_if_present};
@@ -255,13 +255,22 @@ pub fn install(opts: &InstallOptions, payload: &Payload, mode: Mode) -> anyhow::
 
 /// One installer at a time changes an installation.
 fn lock(layout: &Layout) -> anyhow::Result<FileLock> {
-    FileLock::try_acquire(&layout.installer.join("lock"))
-        .map_err(|_| anyhow!("另一個 vpn-installer 正在處理這份安裝，請等它結束"))
+    let path = layout.installer.join("lock");
+    FileLock::try_acquire(&path).map_err(|e| match e {
+        LockError::Held => anyhow!("另一個 vpn-installer 正在處理這份安裝，請等它結束"),
+        // Not another installer: the lock file itself could not be used.
+        LockError::Io(io) => anyhow::Error::new(io).context(format!("鎖定 {}", path.display())),
+    })
 }
 
 /// Keeps a copy of this installer so the installation can manage itself later.
 fn stage_self(staging: &Path) {
+    // nosemgrep: rust.lang.security.current-exe.current-exe -- copies this installer for later upgrades; nothing is decided by its path
     if let Ok(me) = std::env::current_exe().and_then(fs::read) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best effort, like reading the executable above: without the copy the installation only lacks bin/vpn-installer"
+        )]
         let _ = fsx::write_atomic(&staging.join("vpn-installer"), &me, 0o755);
     }
 }
@@ -382,7 +391,7 @@ fn fresh(
         let undo = ctx
             .sup
             .remove(&ctx.jobs.iter().rev().map(clone_job).collect::<Vec<_>>());
-        let _ = remove_dir_if_present(&ctx.layout.bin);
+        fsx::discard_dir(&ctx.layout.bin);
         return Err(match undo {
             Ok(()) => e.context("安裝失敗：這次安裝的服務與程式已移除，資料與日誌保留"),
             Err(u) => e.context(format!("安裝失敗，而且沒能完全移除這次安裝的服務（{u:#}）")),
@@ -391,7 +400,7 @@ fn fresh(
     let linger = unattended(ctx);
     let rec = new_record(ctx, staged, &listen, ssh_dir, linger);
     rec.save(&ctx.layout.record)?;
-    let _ = remove_dir_if_present(&ctx.layout.staging);
+    fsx::discard_dir(&ctx.layout.staging);
     say!("安裝完成。");
     ctx.print_summary(&rec);
     Ok(())
@@ -437,7 +446,7 @@ fn upgrade(
             "已安裝 build {}，服務正常，沒有需要變更的地方。",
             rec.build_id
         );
-        let _ = remove_dir_if_present(&layout.staging);
+        fsx::discard_dir(&layout.staging);
         return Ok(());
     }
     let from = ctx
@@ -490,12 +499,12 @@ fn upgrade(
             });
         }
     };
-    let _ = remove_dir_if_present(&layout.bin_previous);
+    fsx::discard_dir(&layout.bin_previous);
     prune_backups(&layout.backups);
     let linger = unattended(ctx);
     let rec = new_record(ctx, staged, &listen, ssh_dir, linger);
     rec.save(&layout.record)?;
-    let _ = remove_dir_if_present(&layout.staging);
+    fsx::discard_dir(&layout.staging);
     say!("升級完成（{from} → {}）。", rec.build_id);
     ctx.print_summary(&rec);
     Ok(())
@@ -602,7 +611,7 @@ fn prune_backups(dir: &Path) {
     names.sort();
     let excess = names.len().saturating_sub(KEEP_BACKUPS);
     for old in names.into_iter().take(excess) {
-        let _ = fs::remove_dir_all(old);
+        fsx::discard_dir(&old);
     }
 }
 
@@ -754,7 +763,7 @@ fn purge_root(layout: &Layout) -> anyhow::Result<Vec<String>> {
     }
     // Sockets may live outside the root (Linux runtime directory).
     if !layout.paths.run.starts_with(root) {
-        let _ = fs::remove_dir_all(&layout.paths.run);
+        fsx::discard_dir(&layout.paths.run);
     }
     kept.sort();
     Ok(kept)

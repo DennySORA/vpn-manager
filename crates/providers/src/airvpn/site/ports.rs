@@ -48,7 +48,8 @@ const MAX_WORD: usize = 32;
 /// One forwarded port of the account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Port {
-    pub port: u16,
+    /// The port number.
+    pub number: u16,
     /// `AirVPN`'s pool of the port; a delete names it.
     pub pool: u32,
     pub enabled: bool,
@@ -69,7 +70,7 @@ impl Port {
     /// The port on the tunnel address that the forwarded traffic arrives at.
     #[must_use]
     pub fn local_port(&self) -> u16 {
-        self.local.unwrap_or(self.port)
+        self.local.unwrap_or(self.number)
     }
 }
 
@@ -205,7 +206,7 @@ fn list_of(o: &Map<String, Value>) -> Result<PortList, Text> {
                 .ok_or_else(|| tr!("id of a device", "裝置的 id", "デバイスの id"))?;
             let name = match k.get("name") {
                 Some(Value::String(n)) => crate::display_text(n, MAX_DEVICE_NAME)
-                    .map_err(|_| device_name())?
+                    .map_err(|_not_text| device_name())?
                     .unwrap_or_else(|| id.to_owned()),
                 _ => return Err(device_name()),
             };
@@ -500,13 +501,13 @@ fn port_of(o: &Map<String, Value>) -> Result<Port, Text> {
         Some(Value::String(s)) if s.trim().is_empty() => None,
         Some(v) => match number(v) {
             Some(0) => None,
-            Some(n) => Some(u16::try_from(n).map_err(|_| field("local"))?),
+            Some(n) => Some(u16::try_from(n).map_err(|_out_of_range| field("local"))?),
             None => return Err(field("local")),
         },
     }
     .filter(|l| *l != port);
     Ok(Port {
-        port,
+        number: port,
         pool,
         enabled,
         protocol,

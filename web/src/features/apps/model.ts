@@ -181,12 +181,6 @@ export function sandboxApps(apps: readonly AppView[], instanceId: string): AppVi
   return apps.filter((a) => a.spec.instance_id === instanceId && a.spec.isolation === "strict_netns");
 }
 
-/** The sandbox's Apps in a few words: "P2P client", "P2P client 等 3 個 App". */
-export function sandboxAppsLabel(apps: readonly AppView[]): string {
-  const first = apps[0]?.spec.name ?? "";
-  return apps.length > 1 ? m.sandboxApps(first, apps.length) : first;
-}
-
 /** Running Apps whose saved settings apply only after a restart (the list's batch action). */
 export function pendingRestartApps(views: readonly AppView[]): AppView[] {
   return views.filter((v) => pendingConfig(v) !== null);

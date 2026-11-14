@@ -8,7 +8,7 @@
 //! the target, and the directory is fsynced: a write either lands whole or leaves the old file.
 //! Backups are new files (`O_EXCL`) that never replace anything.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "getuid for the ownership checks of the SSH directory and its files"
 )]
@@ -265,11 +265,11 @@ impl SshDir {
         let written = f.write_all(text.as_bytes()).and_then(|()| f.sync_all());
         drop(f);
         if let Err(e) = written {
-            let _ = fs::remove_file(&tmp);
+            discard(&tmp);
             return Err(e.into());
         }
         if let Err(e) = fs::rename(&tmp, &target) {
-            let _ = fs::remove_file(&tmp);
+            discard(&tmp);
             return Err(e.into());
         }
         Ok(File::open(&self.path)?.sync_all()?)
@@ -310,7 +310,7 @@ impl SshDir {
             };
             if let Err(e) = f.write_all(text.as_bytes()).and_then(|()| f.sync_all()) {
                 drop(f);
-                let _ = fs::remove_file(&path);
+                discard(&path);
                 return Err(tr!(
                     "Cannot write the whole backup: {e}",
                     "無法完整寫入備份：{e}",
@@ -377,6 +377,17 @@ impl SshDir {
             }
         }
     }
+}
+
+/// Remove a file this module has just created (a temporary file or a backup) after writing it
+/// failed. Best effort: the caller gets the error that stopped the write, and a file left behind
+/// has a name of its own and replaces nothing.
+fn discard(path: &Path) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best effort: the caller already gets the error that stopped the write"
+    )]
+    let _ = fs::remove_file(path);
 }
 
 /// A symlink whose target does not exist, as [`Found::Unsafe`] names it.

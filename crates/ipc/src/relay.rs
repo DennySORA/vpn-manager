@@ -226,13 +226,14 @@ impl RelayAnswer {
 ///
 /// It checks the version, a well-formed destination, a nonce it has not seen, its own route, and — for a request an exit check
 /// authorized — epochs that have not moved since that check.
+#[derive(Debug)]
 pub struct Admission {
     route: RelayRoute,
     connector: u64,
     seen: Mutex<Seen>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Seen {
     set: HashSet<Nonce>,
     order: VecDeque<Nonce>,
@@ -316,6 +317,10 @@ impl Admission {
             }
             Err(_) => return Err(refuse(BAD_REQUEST, malformed())),
         }
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "a malformed line is answered with the fixed `BAD_REQUEST` code and its translated message, like the version check above; the JSON parser's detail is not part of the answer"
+        )]
         let request: RelayLine =
             serde_json::from_str(line).map_err(|_| refuse(BAD_REQUEST, malformed()))?;
         if request.port == 0

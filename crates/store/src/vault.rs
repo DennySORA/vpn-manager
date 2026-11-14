@@ -20,10 +20,28 @@ pub struct Vault {
     key_check: String,
 }
 
+/// Shows which key it is; the key and everything derived from it stay out of logs.
+impl std::fmt::Debug for Vault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vault")
+            .field("key_id", &self.key_id)
+            .finish_non_exhaustive()
+    }
+}
+
 pub struct Sealed {
     pub key_id: u32,
     pub nonce: [u8; 24],
     pub ciphertext: Vec<u8>,
+}
+
+/// HMAC-SHA256 under `key`.
+#[expect(
+    clippy::expect_used,
+    reason = "HMAC takes a key of any length: `new_from_slice` never fails for it"
+)]
+fn hmac_sha256(key: &[u8]) -> Hmac<Sha256> {
+    <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length")
 }
 
 /// Names a master key without revealing it (HMAC of a fixed label): what the store records as
@@ -34,8 +52,7 @@ pub struct Sealed {
 /// Never in practice: HMAC-SHA256 accepts a key of any length.
 #[must_use]
 pub fn key_check_of(master_key: &[u8; 32]) -> String {
-    let mut mac =
-        <Hmac<Sha256> as KeyInit>::new_from_slice(master_key).expect("HMAC accepts any key length");
+    let mut mac = hmac_sha256(master_key);
     mac.update(b"vpn-manager/vault-key-check/v1");
     hex::encode(mac.finalize().into_bytes())
 }
@@ -44,8 +61,7 @@ impl Vault {
     pub fn new(master_key: &Zeroizing<[u8; 32]>, key_id: u32, installation: String) -> Self {
         // Separate subkey for request fingerprints (HMAC), so a fingerprint of a low-entropy
         // secret cannot be brute-forced offline from the database.
-        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(master_key.as_ref())
-            .expect("HMAC accepts any key length");
+        let mut mac = hmac_sha256(master_key.as_ref());
         mac.update(b"vpn-manager/request-fingerprint/v1");
         let mut fingerprint_key = Zeroizing::new([0u8; 32]);
         fingerprint_key.copy_from_slice(&mac.finalize().into_bytes());
@@ -89,7 +105,7 @@ impl Vault {
                     aad: &aad,
                 },
             )
-            .map_err(|_| StoreError::Vault("encryption failed".into()))?;
+            .map_err(|_opaque| StoreError::Vault("encryption failed".into()))?;
         Ok(Sealed {
             key_id: self.key_id,
             nonce,
@@ -110,8 +126,8 @@ impl Vault {
                 "secret sealed with an unknown key".into(),
             ));
         }
-        let nonce =
-            <&XNonce>::try_from(nonce).map_err(|_| StoreError::Vault("bad nonce".into()))?;
+        let nonce = <&XNonce>::try_from(nonce)
+            .map_err(|_wrong_length| StoreError::Vault("bad nonce".into()))?;
         let aad = self.aad(secret_id, kind, key_id);
         self.cipher
             .decrypt(
@@ -122,13 +138,12 @@ impl Vault {
                 },
             )
             .map(Zeroizing::new)
-            .map_err(|_| StoreError::Vault("authentication failed".into()))
+            .map_err(|_opaque| StoreError::Vault("authentication failed".into()))
     }
 
     /// Keyed fingerprint (HMAC-SHA256, hex) for idempotency of requests that carry secrets.
     pub fn fingerprint(&self, data: &[u8]) -> String {
-        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(self.fingerprint_key.as_ref())
-            .expect("HMAC accepts any key length");
+        let mut mac = hmac_sha256(self.fingerprint_key.as_ref());
         mac.update(data);
         hex::encode(mac.finalize().into_bytes())
     }

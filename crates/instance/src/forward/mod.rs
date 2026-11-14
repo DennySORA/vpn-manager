@@ -214,6 +214,16 @@ pub struct PortController<I: TunnelInbound> {
     relayed: Arc<RelayedCounters>,
 }
 
+impl<I: TunnelInbound> std::fmt::Debug for PortController<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PortController")
+            .field("networks", &self.networks)
+            .field("tcp_idle", &self.tcp_idle)
+            .field("forwards", &self.forwards.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<I: TunnelInbound> PortController<I> {
     /// `networks`: the tunnel interface's own addresses with their prefixes.
     pub fn new(

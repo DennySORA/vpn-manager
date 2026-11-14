@@ -4,13 +4,11 @@
 //! with a throwaway CA. The egress binding comes from a scripted fake of the manager. Nothing
 //! touches the network, the manager, or a real account.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -176,7 +174,11 @@ impl Fixture {
         handler: Handler,
         refuse_dial: fn(&str, u16, RelayFamily) -> Option<&'static str>,
     ) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Private like the manager's run directory: a client refuses a socket others could replace.
+        let dir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let path = dir.path().join("c.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -313,6 +315,10 @@ async fn serve(
             Ok::<_, Infallible>(response)
         }
     });
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the connection ends when the client is done or gives up; either way this relay connection is over"
+    )]
     let _ = hyper::server::conn::http1::Builder::new()
         .serve_connection(TokioIo::new(tls), service)
         .await;

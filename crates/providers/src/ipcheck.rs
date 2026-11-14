@@ -26,7 +26,7 @@ use vpn_domain::validation::is_special;
 use zeroize::Zeroizing;
 
 use crate::display_text;
-use crate::error::{ProviderError, status_error, unexpected_status};
+use crate::error::{ProviderError, from_json, status_error, unexpected_status};
 use crate::https::{Connect, Family, HttpsClient, Request};
 
 pub const MULLVAD_V4_HOST: &str = "ipv4.am.i.mullvad.net";
@@ -143,7 +143,7 @@ fn parse_mullvad(body: &[u8], family: Family) -> Result<IpObservation, ProviderE
         #[serde(default)]
         mullvad_exit_ip_hostname: Option<String>,
     }
-    let raw: AmIMullvad = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: AmIMullvad = from_json(body, drift)?;
     Ok(IpObservation {
         ip: exit_ip(&raw.ip, family)?,
         country: place(Some(&raw.country))?,
@@ -194,7 +194,7 @@ fn parse_airvpn(body: &[u8], family: Family) -> Result<IpObservation, ProviderEr
         #[serde(default)]
         geo_additional: Option<GeoAdditional>,
     }
-    let raw: WhatIsMyIp = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: WhatIsMyIp = from_json(body, drift)?;
     if raw.result != "ok" {
         return Err(drift());
     }
@@ -220,7 +220,7 @@ fn parse_ipleak(body: &[u8], family: Family) -> Result<IpObservation, ProviderEr
         #[serde(default)]
         city_name: Option<String>,
     }
-    let raw: IpLeak = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: IpLeak = from_json(body, drift)?;
     Ok(IpObservation {
         ip: exit_ip(&raw.ip, family)?,
         country: place(raw.country_name.as_deref())?,
@@ -235,7 +235,7 @@ fn exit_ip(value: &str, family: Family) -> Result<IpAddr, ProviderError> {
     let ip = value
         .trim()
         .parse::<IpAddr>()
-        .map_err(|_| drift())?
+        .map_err(|_not_an_address| drift())?
         .to_canonical();
     if Family::of(ip) != family || is_special(ip) {
         return Err(ProviderError::ContractDrift(tr!(
@@ -249,6 +249,6 @@ fn exit_ip(value: &str, family: Family) -> Result<IpAddr, ProviderError> {
 
 fn place(value: Option<&str>) -> Result<Option<String>, ProviderError> {
     value.map_or(Ok(None), |text| {
-        display_text(text, MAX_PLACE).map_err(|_| drift())
+        display_text(text, MAX_PLACE).map_err(|_not_text| drift())
     })
 }

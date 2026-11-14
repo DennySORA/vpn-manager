@@ -22,6 +22,8 @@ use vpn_domain::{InstanceId, Text, Timestamp, tr};
 use vpn_platform::process::ProcessIdentity;
 use vpn_sync::Mutex;
 
+use crate::remove_file_if_present;
+
 /// Most record files looked at.
 const RECORDS_MAX: usize = 4096;
 const RECORD_FORMAT: u32 = 1;
@@ -70,11 +72,13 @@ impl WorkerRecord {
 }
 
 /// A record file found on disk.
+#[derive(Debug)]
 pub struct RecordFile {
     pub path: PathBuf,
     pub record: Result<WorkerRecord, Text>,
 }
 
+#[derive(Debug)]
 pub struct Inventory {
     dir: PathBuf,
     live: Mutex<HashMap<u32, LiveWorker>>,
@@ -149,7 +153,7 @@ impl Inventory {
         let tmp = self
             .dir
             .join(format!(".record.tmp-{}-{}", std::process::id(), record.pid));
-        let _ = fs::remove_file(&tmp);
+        remove_file_if_present(&tmp);
         let text = serde_json::to_vec(record).map_err(std::io::Error::other)?;
         let written = (|| {
             let mut f = OpenOptions::new()
@@ -163,7 +167,7 @@ impl Inventory {
             fs::rename(&tmp, path)
         })();
         if written.is_err() {
-            let _ = fs::remove_file(&tmp);
+            remove_file_if_present(&tmp);
         }
         written
     }
@@ -237,6 +241,7 @@ fn read_record(path: &Path) -> Result<WorkerRecord, Text> {
 }
 
 /// Keeps a worker in the inventory; dropping it (after the reap) forgets the worker.
+#[derive(Debug)]
 pub struct WorkerTicket {
     inventory: Arc<Inventory>,
     pid: u32,
@@ -246,6 +251,6 @@ pub struct WorkerTicket {
 impl Drop for WorkerTicket {
     fn drop(&mut self) {
         self.inventory.live.lock().remove(&self.pid);
-        let _ = fs::remove_file(&self.path);
+        remove_file_if_present(&self.path);
     }
 }

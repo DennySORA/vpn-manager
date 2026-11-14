@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, TcpListener};
 use std::ops::ControlFlow;
 use std::os::fd::{AsFd, OwnedFd};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -45,7 +46,7 @@ use crate::policy::RunningPolicy;
 use crate::resolve::{ResolveError, resolve};
 use crate::sandbox::{self as strict_sandbox};
 use crate::worker::{SpawnError, WorkerEvent, WorkerHandle, spawn};
-use crate::{Changes, Ctx, ManagerEvent};
+use crate::{Changes, Ctx, ManagerEvent, deliver, remove_file_if_present, send_event};
 
 /// Unban requests one generation may have waiting for its worker's answer.
 const MAX_PENDING_UNBANS: usize = 256;
@@ -296,6 +297,8 @@ pub struct Actor {
     /// What the running generation was started with ([`crate::inputs`]).
     running_inputs: Option<crate::inputs::WorkerInputs>,
     last_sample_emit: Option<Instant>,
+    /// Each managed App's share of the payload, for the samples sent on.
+    app_payload: crate::app_payload::AppPayload,
     /// The last overlay sent to any generation: a new generation with the same lists and content
     /// keeps its revision instead of taking a new one.
     last_overlay: Option<SentOverlay>,
@@ -623,6 +626,7 @@ impl Actor {
             last_key: None,
             running_inputs: None,
             last_sample_emit: None,
+            app_payload: crate::app_payload::AppPayload::default(),
             last_overlay: None,
             sandbox: None,
             sandbox_epoch: 0,
@@ -675,17 +679,17 @@ impl Actor {
                 self.retry_at = None;
                 self.refresh_intent().await;
                 self.settle_stopped();
-                let _ = reply.send(());
+                deliver(reply, ());
             }
             ActorCmd::Inspect(reply) => {
-                let _ = reply.send(self.snapshot());
+                deliver(reply, self.snapshot());
             }
             ActorCmd::Route(reply) => {
                 let route = self.live.as_ref().and_then(|l| {
                     (self.status.phase == Phase::Ready && l.permit.is_some())
                         .then(|| (l.generation, l.connector.clone()))
                 });
-                let _ = reply.send(route);
+                deliver(reply, route);
             }
             ActorCmd::GatewaysChanged => {
                 if self.live.is_none() {
@@ -698,10 +702,10 @@ impl Actor {
                 }
             }
             ActorCmd::HeldPort(id, reply) => {
-                let _ = reply.send(self.held.get(&id).map(|h| h.port));
+                deliver(reply, self.held.get(&id).map(|h| h.port));
             }
             ActorCmd::Listeners(reply) => {
-                let _ = reply.send(self.listeners());
+                deliver(reply, self.listeners());
             }
             ActorCmd::Remove(reply) => {
                 self.stop_worker(false, "REMOVED").await;
@@ -713,7 +717,7 @@ impl Actor {
                 // The connection is gone: so are its sandbox and its Apps.
                 self.teardown_sandbox("REMOVED").await;
                 self.ctx.strict_apps.forget(self.id);
-                let _ = reply.send(());
+                deliver(reply, ());
                 return ControlFlow::Break(());
             }
             ActorCmd::Shutdown(reply) => {
@@ -721,13 +725,13 @@ impl Actor {
                 // The sandbox stays, closed, for the next manager to adopt (its
                 // holder gives up `ORPHAN_GRACE` after this process exits if none comes).
                 let _ = self.release_sandbox();
-                let _ = reply.send(());
+                deliver(reply, ());
                 return ControlFlow::Break(());
             }
             ActorCmd::SandboxSpawn(spec, reply) => {
                 let result = self.sandbox_spawn(*spec).await;
                 self.emit();
-                let _ = reply.send(result);
+                deliver(reply, result);
             }
             ActorCmd::Unban { source, reply } => self.unban(source, reply).await,
             ActorCmd::ForwardsChanged => self.forwards_changed().await,
@@ -737,7 +741,7 @@ impl Actor {
                     .iter()
                     .find(|b| b.id == id)
                     .map(|b| self.forward_status(b));
-                let _ = reply.send(status);
+                deliver(reply, status);
             }
             ActorCmd::ForwardStatuses(reply) => {
                 let all = self
@@ -745,7 +749,7 @@ impl Actor {
                     .iter()
                     .map(|b| self.forward_status(b))
                     .collect();
-                let _ = reply.send(all);
+                deliver(reply, all);
             }
         }
         ControlFlow::Continue(())
@@ -1261,8 +1265,8 @@ impl Actor {
         generation: u64,
         config: WorkerConfig,
         fds: Vec<OwnedFd>,
-        entry: Option<vpn_platform::sandbox::WorkerEntry>,
-        limits: &vpn_domain::InstanceLimits,
+        entry: Option<WorkerEntry>,
+        limits: &InstanceLimits,
     ) -> Option<(
         WorkerHandle,
         Option<(Leaf, bool)>,
@@ -1680,7 +1684,7 @@ impl Actor {
                 live.unbans.drain(..).partition(|(s, _)| *s == source);
             live.unbans = waiting;
             for (_, reply) in done {
-                let _ = reply.send(UnbanEffect::Applied);
+                deliver(reply, UnbanEffect::Applied);
             }
         }
     }
@@ -1988,25 +1992,25 @@ impl Actor {
     /// Lift a ban on the running worker; the answer waits for its confirmation.
     async fn unban(&mut self, source: IpAddr, reply: oneshot::Sender<UnbanEffect>) {
         let Some(live) = self.live.as_mut() else {
-            let _ = reply.send(UnbanEffect::NotRunning);
+            deliver(reply, UnbanEffect::NotRunning);
             return;
         };
         if live.unbans.len() >= MAX_PENDING_UNBANS {
-            let _ = reply.send(UnbanEffect::Unconfirmed);
+            deliver(reply, UnbanEffect::Unconfirmed);
             return;
         }
         let source = vpn_domain::validation::ban_scope(source);
         if live.handle.send(&ToWorker::Unban { source }).await.is_ok() {
             live.unbans.push((source, reply));
         } else {
-            let _ = reply.send(UnbanEffect::NotRunning);
+            deliver(reply, UnbanEffect::NotRunning);
         }
     }
 
     /// A generation ends: nothing of it is enforced any more.
     fn forget_live(&self, live: &mut Live) {
         for (_, reply) in live.unbans.drain(..) {
-            let _ = reply.send(UnbanEffect::NotRunning);
+            deliver(reply, UnbanEffect::NotRunning);
         }
         self.ctx.running.lock().remove(&self.id);
     }
@@ -2057,7 +2061,7 @@ impl Actor {
         }
     }
 
-    fn on_sample(&mut self, s: WorkerStatus) {
+    fn on_sample(&mut self, mut s: WorkerStatus) {
         if let Some(t) = self.status.tunnel.as_mut() {
             t.wg_rx_bytes = Counter(s.wg_rx_bytes);
             t.wg_tx_bytes = Counter(s.wg_tx_bytes);
@@ -2102,14 +2106,18 @@ impl Actor {
         }
         self.status.observed_at = Timestamp::now();
         self.on_forward_reports(&s.forwards);
+        self.split_app_payload(&mut s);
         let generation = s.generation;
         // Persisted in the background: never waits for the Store.
         self.ctx.metrics.offer(self.id, &s);
-        let _ = self.ctx.events.send(ManagerEvent::Sample {
-            instance_id: self.id,
-            generation,
-            sample: Box::new(s),
-        });
+        send_event(
+            &self.ctx.events,
+            ManagerEvent::Sample {
+                instance_id: self.id,
+                generation,
+                sample: Box::new(s),
+            },
+        );
         // Status snapshots at most once per 2 s from samples alone.
         let due = self
             .last_sample_emit
@@ -2165,7 +2173,7 @@ impl Actor {
             }
             // A worker that died without its own cleanup leaves its generation's connector
             // socket behind; nobody else uses that path.
-            let _ = std::fs::remove_file(&live.connector);
+            remove_file_if_present(Path::new(&live.connector));
             self.publish_forwards(true);
         }
         self.restart_reject_loops(RejectReason::Reconnecting);
@@ -2191,10 +2199,9 @@ impl Actor {
                     reason: reason.into(),
                 }
             };
-            let _ = live.handle.send(&tighten).await;
-            let _ = live
-                .handle
-                .send(&ToWorker::ResetPayload {
+            live.handle.tell(&tighten).await;
+            live.handle
+                .tell(&ToWorker::ResetPayload {
                     reason: reason.into(),
                 })
                 .await;
@@ -2207,7 +2214,7 @@ impl Actor {
             live.handle.stop(grace).await;
             // The process is reaped: its descriptors (and key lock) are gone, its cgroup empty.
             self.release_cgroup(live.cgroup.take());
-            let _ = std::fs::remove_file(&live.connector);
+            remove_file_if_present(Path::new(&live.connector));
             self.publish_forwards(true);
         }
         // No worker of this Instance is left (reaped above, or none during a back-off): its
@@ -2435,7 +2442,7 @@ impl Actor {
                 .get(self.id.to_string())
                 .await
                 .map_err(|e| e.to_api())?
-                .ok_or_else(|| ApiError::not_found("Instance"))?;
+                .ok_or_else(ApiError::connection_not_found)?;
             if !instance.strict {
                 return Err(ApiError::new(
                     ErrorCode::InvalidState,
@@ -2689,7 +2696,7 @@ impl Actor {
             .map(|(id, _)| *id)
             .collect();
         for id in outdated {
-            let _ = live.handle.send(&ToWorker::RemoveGateway { id }).await;
+            live.handle.tell(&ToWorker::RemoveGateway { id }).await;
             let port = live.served.remove(&id).map(|w| w.port);
             // Keep the listener only when the same port is handed over again below.
             if desired.get(&id).map(|g| g.port) != port {
@@ -2832,10 +2839,10 @@ impl Actor {
     }
 
     fn emit(&self) {
-        let _ = self
-            .ctx
-            .events
-            .send(ManagerEvent::Status(Box::new(self.snapshot())));
+        send_event(
+            &self.ctx.events,
+            ManagerEvent::Status(Box::new(self.snapshot())),
+        );
     }
 }
 
@@ -2933,9 +2940,8 @@ impl Actor {
             let added = wanted.keys().any(|id| !live.forwards.contains_key(id));
             for (binding, lease) in &outdated {
                 if let Some(lease_id) = lease {
-                    let _ = live
-                        .handle
-                        .send(&ToWorker::RevokeForward {
+                    live.handle
+                        .tell(&ToWorker::RevokeForward {
                             binding: *binding,
                             lease_id: *lease_id,
                         })
@@ -3124,9 +3130,8 @@ impl Actor {
                     }
                 }
                 Step::Revoke(lease_id) => {
-                    let _ = live
-                        .handle
-                        .send(&ToWorker::RevokeForward {
+                    live.handle
+                        .tell(&ToWorker::RevokeForward {
                             binding: id,
                             lease_id,
                         })
@@ -3142,6 +3147,33 @@ impl Actor {
 
     /// The worker's per-forward report: counters, and arrivals from outside (kept, and written
     /// to disk at most once a minute per forward and protocol).
+    /// Fill in each managed App's payload (strict mode: the sandbox's Apps), and drop the
+    /// per-port counters it came from: nothing after the manager needs them.
+    fn split_app_payload(&mut self, s: &mut WorkerStatus) {
+        let ports = std::mem::take(&mut s.sandbox_ports);
+        if s.sandbox.is_none() {
+            return;
+        }
+        let owners = self.ctx.apps.strict_ports(self.id);
+        let forwards: Vec<crate::app_payload::ForwardBytes> = s
+            .forwards
+            .iter()
+            .filter_map(|r| {
+                let id = r.id?;
+                let binding = self.bindings.iter().find(|b| b.id == id)?;
+                Some(crate::app_payload::ForwardBytes {
+                    id,
+                    app: binding.target_app_id,
+                    rx: r.bytes_in,
+                    tx: r.bytes_out,
+                })
+            })
+            .collect();
+        s.app_payload =
+            self.app_payload
+                .update(s.generation, &ports, &owners, &forwards, Instant::now());
+    }
+
     fn on_forward_reports(&mut self, reports: &[ForwardStatusWire]) {
         let Some(live) = self.live.as_mut() else {
             return;
@@ -3381,10 +3413,10 @@ impl Actor {
             if force || significant || (counters_moved && due) {
                 rt.published = Some(status.clone());
                 rt.published_at = Some(Instant::now());
-                let _ = self
-                    .ctx
-                    .events
-                    .send(ManagerEvent::ForwardStatus(Box::new(status)));
+                send_event(
+                    &self.ctx.events,
+                    ManagerEvent::ForwardStatus(Box::new(status)),
+                );
             }
         }
     }
@@ -3405,7 +3437,7 @@ mod tests {
     };
 
     /// A stored, stopped Instance whose intent is then set running, and a context for its actor.
-    async fn running_on_disk(dir: &std::path::Path) -> (InstanceId, Arc<Ctx>) {
+    async fn running_on_disk(dir: &Path) -> (InstanceId, Arc<Ctx>) {
         let paths = Paths::under(dir);
         paths.ensure().unwrap();
         let store = Arc::new(Store::open(&paths.state, &Zeroizing::new([9u8; 32]), 1).unwrap());
@@ -3479,7 +3511,7 @@ mod tests {
             events: broadcast::channel(16).0,
             gateway_key: None,
             metrics: crate::metrics::MetricsCollector::new(),
-            changes: tokio::sync::watch::Sender::new(crate::Changes::default()),
+            changes: tokio::sync::watch::Sender::new(Changes::default()),
             running: vpn_sync::Mutex::new(HashMap::new()),
             spawn_gate: tokio::sync::RwLock::new(()),
             resources: Arc::new(vpn_platform::limits::ResourceControl::none("test")),

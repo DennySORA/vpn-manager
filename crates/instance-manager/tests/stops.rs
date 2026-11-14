@@ -9,10 +9,7 @@
 //! The "worker" is `false`: a start gets as far as spawning, which is enough to tell a start
 //! attempt (`WORKER_START`) from an Instance that is held.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -111,7 +108,7 @@ async fn running_instance(paths: &Paths) -> InstanceId {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();

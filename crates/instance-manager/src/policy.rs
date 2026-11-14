@@ -81,6 +81,7 @@ pub fn needs(profile: &RuntimeProfile, dns: Option<&DnsProfile>) -> Vec<Need> {
 }
 
 /// A security profile's blocklists compiled into one overlay.
+#[derive(Debug)]
 pub struct Compiled {
     /// Each list and its content (for naming the one that conflicts).
     pub lists: Vec<(AppliedBlocklist, IpRangeSet)>,
@@ -267,6 +268,7 @@ pub struct RunningPolicy {
 }
 
 /// A save to check before it is written.
+#[derive(Debug)]
 pub enum Proposal<'a> {
     Security(&'a SecurityProfile),
     /// A blocklist's new revision (content, name, enabled); `set` is its new content, `None`
@@ -280,7 +282,7 @@ pub enum Proposal<'a> {
     Dns(&'a DnsProfile),
 }
 
-fn conflict_error(path: String, message: impl Into<vpn_domain::Text>) -> ApiError {
+fn conflict_error(path: String, message: impl Into<Text>) -> ApiError {
     let message = message.into();
     ApiError::new(ErrorCode::PolicyConflict, message.clone()).with_fields(vec![FieldError {
         path,

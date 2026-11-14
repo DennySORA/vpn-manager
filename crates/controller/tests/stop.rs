@@ -1,11 +1,9 @@
 //! Stop and emergency stop reach the manager even when the Store cannot record the operation
 //! (normal write lane full, disk full, writer gone): the stop never waits behind the record.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -100,12 +98,17 @@ fn manager(path: &Path, store_busy: bool) -> Seen {
     seen
 }
 
-fn socket_path(tag: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("vpnm-{tag}-{}-{nanos}.sock", std::process::id()))
+/// A socket path in a private directory of its own: a client never trusts a socket in a
+/// directory others can write (the shared temporary directory among them), and a short path keeps
+/// within the socket address limit.
+fn socket_path(tag: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix("vpnm-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let path = dir.path().join(format!("{tag}.sock"));
+    (dir, path)
 }
 
 async fn app(path: &Path) -> axum::Router {
@@ -158,7 +161,7 @@ async fn stop(app: &axum::Router, id: InstanceId, emergency: bool) -> (StatusCod
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stops_reach_the_manager_when_the_store_cannot_record_them() {
-    let path = socket_path("busy");
+    let (_dir, path) = socket_path("busy");
     let seen = manager(&path, true);
     let app = app(&path).await;
     let id = InstanceId::new();
@@ -179,5 +182,4 @@ async fn stops_reach_the_manager_when_the_store_cannot_record_them() {
         *seen.lock(),
         [(id, Lifecycle::Emergency), (id, Lifecycle::Stop)]
     );
-    let _ = std::fs::remove_file(&path);
 }

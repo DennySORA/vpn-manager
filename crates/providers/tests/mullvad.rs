@@ -1,10 +1,7 @@
 //! The Mullvad adapter against fixtures shaped like `api.mullvad.net` answers (official app
 //! types, the previous implementation's fixtures), served over the in-memory TLS fixture.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 mod support;
 

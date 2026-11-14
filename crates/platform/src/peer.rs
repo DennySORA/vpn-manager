@@ -15,9 +15,12 @@
 //!
 //! Either way the answer is a fact about the connection when it was accepted; callers decide
 //! once per connection and fail closed on anything but a match.
-#![allow(
-    unsafe_code,
-    reason = "macOS peer process lookup calls libproc (proc_listallpids/proc_pidinfo/proc_pidfdinfo) via libc"
+#![cfg_attr(
+    target_os = "macos",
+    expect(
+        unsafe_code,
+        reason = "macOS peer process lookup calls libproc (proc_listallpids/proc_pidinfo/proc_pidfdinfo) via libc"
+    )
 )]
 
 use std::io;
@@ -180,8 +183,8 @@ fn all_pids() -> io::Result<Vec<libc::pid_t>> {
     };
     // Room for processes started meanwhile.
     let mut pids: Vec<libc::pid_t> = vec![0; n + 256];
-    let bytes = libc::c_int::try_from(pids.len() * std::mem::size_of::<libc::pid_t>())
-        .map_err(|_| io::Error::other("the process list is too large"))?;
+    let bytes = libc::c_int::try_from(pids.len() * size_of::<libc::pid_t>())
+        .map_err(|_too_large| io::Error::other("the process list is too large"))?;
     // SAFETY: the buffer holds `pids.len()` pids, `bytes` long.
     let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast::<libc::c_void>(), bytes) };
     let Some(got) = positive(got) else {
@@ -194,7 +197,7 @@ fn all_pids() -> io::Result<Vec<libc::pid_t>> {
 /// The descriptors of `pid`; None when it is gone or not ours to inspect.
 #[cfg(target_os = "macos")]
 fn descriptors(pid: libc::pid_t) -> Option<Vec<libc::proc_fdinfo>> {
-    let entry = std::mem::size_of::<libc::proc_fdinfo>();
+    let entry = size_of::<libc::proc_fdinfo>();
     // SAFETY: a null buffer asks for the size needed.
     let need =
         unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };

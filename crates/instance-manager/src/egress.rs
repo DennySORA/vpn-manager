@@ -95,7 +95,7 @@ fn profile_usable(p: &RuntimeProfile, secrets: &HashSet<SecretRef>) -> bool {
 
 /// The deciding fact about the selected egress: whether it needs recovery, and whether a manual
 /// rebootstrap may be opened (with the reason either way).
-pub(crate) fn assess(f: &Facts) -> EgressRecovery {
+pub(crate) fn assess(f: &Facts<'_>) -> EgressRecovery {
     if f.egress.desired_mode == EgressMode::Disabled {
         return verdict(
             false,
@@ -148,7 +148,7 @@ pub(crate) fn assess(f: &Facts) -> EgressRecovery {
 /// [`assess`] once the selected egress and its status are known: what holds it, or how it
 /// fails.
 fn assess_selected(
-    f: &Facts,
+    f: &Facts<'_>,
     selected: InstanceId,
     spec: Option<&InstanceSpec>,
     name: Text,
@@ -250,7 +250,7 @@ fn unknown_name() -> Text {
 /// [`assess`] once the selected egress fails for good (`code`): whether another local way out
 /// exists, or a manual rebootstrap may be opened.
 fn assess_failing(
-    f: &Facts,
+    f: &Facts<'_>,
     selected: InstanceId,
     spec: Option<&InstanceSpec>,
     name: &Text,
@@ -772,7 +772,7 @@ impl Manager {
         &self,
         run: String,
         reason_code: String,
-        reason: vpn_domain::Text,
+        reason: Text,
     ) -> Result<EgressView, ApiError> {
         {
             let _d = self.bootstrap().decide().await;

@@ -12,7 +12,7 @@ use vpn_domain::{Text, Timestamp, WgKey, tr};
 use zeroize::Zeroizing;
 
 use crate::display_text;
-use crate::error::ProviderError;
+use crate::error::{ProviderError, from_json};
 
 const ACCOUNT_DIGITS: usize = 16;
 /// Token length bounds of the previous implementation (`api.mjs`).
@@ -28,13 +28,13 @@ pub struct AccountNumber(Zeroizing<String>);
 
 /// [`InvalidAccountNumber::text`] is the message a person reads; `Display` is its English.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{}", self.text().en)]
+#[error("{}", Self::text().en)]
 pub struct InvalidAccountNumber;
 
 impl InvalidAccountNumber {
     /// The rule, in the three languages.
     #[must_use]
-    pub fn text(&self) -> Text {
+    pub fn text() -> Text {
         tr!(
             "The account number must be 16 digits",
             "帳號號碼必須是 16 位數字",
@@ -112,6 +112,10 @@ impl AccessToken {
         let mut value = Zeroizing::new(String::with_capacity(7 + self.secret.len()));
         value.push_str("Bearer ");
         value.push_str(&self.secret);
+        #[expect(
+            clippy::expect_used,
+            reason = "`parse_token`, the only constructor, admits visible ASCII only, which with `Bearer ` is a valid header value"
+        )]
         let mut header =
             HeaderValue::from_str(&value).expect("token validated as visible ASCII at parse");
         header.set_sensitive(true);
@@ -154,13 +158,13 @@ pub struct DeviceId(String);
 
 /// [`InvalidDeviceId::text`] is the message a person reads; `Display` is its English.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{}", self.text().en)]
+#[error("{}", Self::text().en)]
 pub struct InvalidDeviceId;
 
 impl InvalidDeviceId {
     /// The rule, in the three languages.
     #[must_use]
-    pub fn text(&self) -> Text {
+    pub fn text() -> Text {
         tr!(
             "The device ID is not in the expected format",
             "裝置 ID 格式不正確",
@@ -282,7 +286,7 @@ pub fn parse_token(body: &[u8]) -> Result<AccessToken, ProviderError> {
             "アクセストークンの応答"
         ))
     };
-    let raw: Raw<'_> = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: Raw<'_> = from_json(body, drift)?;
     let secret = match raw.access_token {
         Cow::Borrowed(token) => Zeroizing::new(token.to_owned()),
         Cow::Owned(token) => Zeroizing::new(token),
@@ -306,7 +310,7 @@ pub fn parse_account(body: &[u8]) -> Result<Account, ProviderError> {
         #[serde(default)]
         can_add_devices: Option<bool>,
     }
-    let raw: Raw = serde_json::from_slice(body).map_err(|_| {
+    let raw: Raw = from_json(body, || {
         ProviderError::ContractDrift(tr!("account response", "帳號回應", "アカウントの応答"))
     })?;
     Ok(Account {
@@ -353,13 +357,13 @@ pub fn parse_device(body: &[u8]) -> Result<Device, ProviderError> {
             "新しいデバイスの応答"
         ))
     };
-    let raw: RawDevice = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: RawDevice = from_json(body, drift)?;
     raw.validate().ok_or_else(drift)
 }
 
 pub fn parse_devices(body: &[u8]) -> Result<Vec<Device>, ProviderError> {
     let drift = || ProviderError::ContractDrift(tr!("device list", "裝置清單", "デバイス一覧"));
-    let raw: Vec<RawDevice> = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: Vec<RawDevice> = from_json(body, drift)?;
     if raw.len() > MAX_DEVICES_LISTED {
         return Err(drift());
     }

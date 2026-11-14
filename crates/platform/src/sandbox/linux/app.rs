@@ -27,7 +27,7 @@
 //! The tree lives exactly as long as the App: when the App process exits, the rest of its tree
 //! gets SIGTERM, then SIGKILL. Tearing the sandbox down ends every App in it (they are in its
 //! pid namespace).
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the App launch into the sandbox: setns, fork/exec and fds via libc"
 )]
@@ -60,6 +60,7 @@ const MAX_ENV: usize = 1024;
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What managed Apps need to start in one sandbox; held for the manager while the sandbox is.
+#[derive(Debug)]
 pub struct AppEntry {
     pub(crate) user: OwnedFd,
     pub(crate) net: OwnedFd,
@@ -130,6 +131,7 @@ enum AppReply {
 }
 
 /// The [`IsolationBackend`] of one App start in one sandbox (`AppIsolation::StrictNetns`).
+#[derive(Debug)]
 pub struct AppBackend {
     exe: PathBuf,
     entry: Weak<AppEntry>,
@@ -200,7 +202,12 @@ impl IsolationBackend for AppBackend {
         match init.filter(|i| apps::proc::is_alive(*i)) {
             Some(init) => {
                 let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
-                let _ = apps::proc::signal(init, sig);
+                if !apps::proc::signal(init, sig) {
+                    tracing::trace!(
+                        pid = init.pid,
+                        "the App tree's init ended before the signal"
+                    );
+                }
                 if force {
                     apps::proc::signal_tree(root, tracked, true);
                 }
@@ -212,7 +219,8 @@ impl IsolationBackend for AppBackend {
 
 /// `s` as UTF-8; `what` names it, as the start of a sentence (“An argument”).
 fn utf8(s: OsString, what: impl FnOnce() -> Text) -> io::Result<String> {
-    s.into_string().map_err(|_| {
+    // The error is the value itself, which may be a secret: only what it is is told.
+    s.into_string().map_err(|_value| {
         tr!(
             "{what} is not valid UTF-8",
             "{what}不是有效的 UTF-8",
@@ -298,6 +306,40 @@ fn send_command(
     wire::send_json(ctl, &AppMsg::Go, &[])
 }
 
+/// What the launcher's process does between `fork` and `exec`: the App's cgroup and open-files
+/// limit first, before the launcher enters any namespace (the whole tree it starts inherits
+/// both), then `control` (its end of the control socket) on fd 3 and nothing else inherited.
+fn before_exec(
+    limits: apps::SpawnLimits,
+    control: RawFd,
+) -> impl FnMut() -> io::Result<()> + Send + Sync + 'static {
+    move || {
+        if let Some(fd) = limits.cgroup_procs {
+            // SAFETY: write(2) of one byte from a static buffer to a descriptor the manager
+            // keeps open across the spawn.
+            unsafe { libc::write(fd, b"0".as_ptr().cast(), 1) };
+        }
+        if let Some(n) = limits.open_files {
+            crate::limits::set_open_files(n)?;
+        }
+        if control == CONTROL_FD {
+            // SAFETY: fcntl(F_GETFD) only reads the flags of fd 3, the control socket.
+            let flags = unsafe { libc::fcntl(CONTROL_FD, libc::F_GETFD) };
+            // SAFETY: fcntl(F_SETFD) only clears close-on-exec of fd 3.
+            unsafe { libc::fcntl(CONTROL_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+        } else {
+            // SAFETY: dup2 copies the control socket, which the manager keeps open across the
+            // spawn, onto fd 3.
+            let copied = unsafe { libc::dup2(control, CONTROL_FD) };
+            if copied < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        cloexec_from(CONTROL_FD + 1);
+        Ok(())
+    }
+}
+
 /// Start the App's launcher and hand it the App; returns what runs once the App runs.
 fn spawn_app(
     exe: &Path,
@@ -334,28 +376,9 @@ fn spawn_app(
         .process_group(0)
         // The App outlives a dropped handle: only an explicit stop ends it.
         .kill_on_drop(false);
-    // SAFETY: runs in the forked child before exec and only calls async-signal-safe functions
-    // (write, setrlimit, dup2, fcntl, close_range).
-    unsafe {
-        c.pre_exec(move || {
-            // The App's cgroup and open-files limit first, before the launcher enters any
-            // namespace: the whole tree it starts inherits both.
-            if let Some(fd) = limits.cgroup_procs {
-                libc::write(fd, b"0".as_ptr().cast(), 1);
-            }
-            if let Some(n) = limits.open_files {
-                crate::limits::set_open_files(n)?;
-            }
-            if theirs_raw == CONTROL_FD {
-                let flags = libc::fcntl(CONTROL_FD, libc::F_GETFD);
-                libc::fcntl(CONTROL_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-            } else if libc::dup2(theirs_raw, CONTROL_FD) < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            cloexec_from(CONTROL_FD + 1);
-            Ok(())
-        });
-    }
+    // SAFETY: the closure runs in the forked child before exec and only calls async-signal-safe
+    // functions (write, setrlimit, dup2, fcntl, close_range).
+    unsafe { c.pre_exec(before_exec(limits, theirs_raw)) };
     let child = c.spawn()?;
     drop(theirs);
     let ctl = mine.as_raw_fd();
@@ -464,15 +487,21 @@ fn mirror(code: Option<i32>, signal: Option<i32>) -> i32 {
         return code;
     }
     let sig = signal.unwrap_or(libc::SIGKILL);
-    // SAFETY: plain signal-state calls on this process, then kill ourselves.
-    unsafe {
-        let mut set: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&raw mut set);
-        libc::sigaddset(&raw mut set, sig);
-        libc::signal(sig, libc::SIG_DFL);
-        libc::sigprocmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut());
-        libc::kill(libc::getpid(), sig);
-    }
+    // Plain signal-state calls on this process, then it kills itself.
+    // SAFETY: an all-zero sigset_t is a valid value for sigemptyset to initialize.
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: sigemptyset initializes the local set.
+    unsafe { libc::sigemptyset(&raw mut set) };
+    // SAFETY: sigaddset on the initialized local set.
+    unsafe { libc::sigaddset(&raw mut set, sig) };
+    // SAFETY: the signal's default disposition, with plain arguments.
+    unsafe { libc::signal(sig, libc::SIG_DFL) };
+    // SAFETY: sigprocmask with a pointer to the local set and no buffer for the old one.
+    unsafe { libc::sigprocmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()) };
+    // SAFETY: getpid has no preconditions.
+    let me = unsafe { libc::getpid() };
+    // SAFETY: kill with this process's own pid and the App's signal.
+    unsafe { libc::kill(me, sig) };
     128 + sig
 }
 
@@ -556,13 +585,12 @@ pub fn run_app() -> i32 {
     } = collect_start_reports(report_fd);
     let init = match (started, init, app) {
         (Ok(()), Some(init), Some(app)) => {
-            let _ = wire::send_json(
+            answer(
                 ctl,
                 &AppReply::Started {
                     tree_init: init,
                     app,
                 },
-                &[],
             );
             init
         }
@@ -603,16 +631,25 @@ fn report_failure(ctl: RawFd, stage: &str, e: &io::Error) -> i32 {
     log_line(&format!(
         "cannot start in the strict isolation sandbox ({stage}): {e}"
     ));
-    let _ = wire::send_json(
+    answer(
         ctl,
         &AppReply::Failed {
             stage: stage.into(),
             errno: holder::errno_of(e),
             message: Text::of_io_error(e),
         },
-        &[],
     );
     126
+}
+
+/// Answer the manager. Best effort: a manager that is gone or stopped reading has nobody to
+/// tell, and the launcher goes on (or ends) the same way.
+fn answer(ctl: RawFd, reply: &AppReply) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "an answer nobody reads changes nothing: the launcher goes on the same way"
+    )]
+    let _ = wire::send_json(ctl, reply, &[]);
 }
 
 /// An App's argv and environment.
@@ -646,7 +683,7 @@ fn launch_of(
     last_cap: u32,
 ) -> io::Result<Launch> {
     CString::new(setup.cwd.as_os_str().as_bytes())
-        .map_err(|_| "NUL in working directory".to_owned())
+        .map_err(|_nul| "NUL in working directory".to_owned())
         .and_then(|cwd| Launch::new(argv, env, cwd, setup.umask, last_cap))
         .map_err(|m| io::Error::new(io::ErrorKind::InvalidInput, m))
 }

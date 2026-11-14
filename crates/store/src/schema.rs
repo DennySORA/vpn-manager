@@ -466,7 +466,7 @@ pub fn migrate_control(conn: &mut Connection) -> Result<(), StoreError> {
 #[cfg(test)]
 pub fn migrate_control_to(conn: &mut Connection, version: i64) -> Result<(), StoreError> {
     let steps = usize::try_from(version)
-        .map_err(|_| StoreError::InvalidState("negative schema version".into()))?;
+        .map_err(|_negative| StoreError::InvalidState("negative schema version".into()))?;
     migrate_steps(conn, version, &CONTROL_STEPS[..steps])
 }
 
@@ -504,7 +504,7 @@ pub fn migrate_metrics(conn: &mut Connection) -> Result<(), StoreError> {
 #[cfg(test)]
 pub fn migrate_metrics_to(conn: &mut Connection, version: i64) -> Result<(), StoreError> {
     let steps = usize::try_from(version)
-        .map_err(|_| StoreError::InvalidState("negative schema version".into()))?;
+        .map_err(|_negative| StoreError::InvalidState("negative schema version".into()))?;
     migrate(conn, version, &METRICS_STEPS[..steps])
 }
 

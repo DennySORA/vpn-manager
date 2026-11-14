@@ -205,6 +205,15 @@ pub struct Opened<'a> {
     pub admitted: Instant,
 }
 
+impl fmt::Debug for Opened<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Opened")
+            .field("permit", &self.permit.is_some())
+            .field("admitted", &self.admitted)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why [`Connect::connect_for`] opened nothing. Nothing of the request was sent.
 #[derive(Debug)]
 pub enum OpenError {
@@ -491,6 +500,12 @@ impl HttpError {
 #[derive(Clone)]
 pub struct Tls(TlsConnector);
 
+impl fmt::Debug for Tls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tls").finish_non_exhaustive()
+    }
+}
+
 impl Tls {
     /// Trusts the public web PKI (webpki roots). Verification cannot be disabled.
     #[must_use]
@@ -510,6 +525,10 @@ impl Tls {
 
     fn build(roots: RootCertStore) -> Self {
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        #[expect(
+            clippy::expect_used,
+            reason = "aws-lc-rs's default provider has cipher suites and key exchanges for TLS 1.2 and 1.3, so the safe default versions are always available"
+        )]
         let mut config = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .expect("aws-lc-rs offers TLS 1.2 and 1.3")
@@ -540,6 +559,14 @@ impl Default for Tls {
 pub struct HttpsClient<C> {
     connector: C,
     tls: TlsConnector,
+}
+
+impl<C: fmt::Debug> fmt::Debug for HttpsClient<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpsClient")
+            .field("connector", &self.connector)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<C: Connect> HttpsClient<C> {
@@ -585,7 +612,8 @@ impl<C: Connect> HttpsClient<C> {
             return Err(HttpError::InvalidRequest);
         };
         let uri = origin_form(&path).ok_or(HttpError::InvalidRequest)?;
-        let authority = HeaderValue::from_str(host).map_err(|_| HttpError::InvalidRequest)?;
+        let authority =
+            HeaderValue::from_str(host).map_err(|_invalid_header| HttpError::InvalidRequest)?;
 
         let target = Target {
             method: &method,
@@ -659,7 +687,7 @@ impl<C: Connect> HttpsClient<C> {
         } else {
             HeaderValue::from_str(&format!("{host}:{port}"))
         }
-        .map_err(|_| HttpError::InvalidRequest)?;
+        .map_err(|_invalid_header| HttpError::InvalidRequest)?;
         let stream = match timeout_at(deadline, self.connector.connect(host, port, family)).await {
             Ok(Ok(stream)) => stream,
             Ok(Err(e)) => return Err(HttpError::Connect(e)),
@@ -764,6 +792,10 @@ async fn exchange_with<S: AsyncStream + 'static>(
         Err(_) => return Err(HttpError::Timeout { sent: false }),
     };
     let driver = tokio::spawn(async move {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a failed connection also fails `sender` or the body read, where the exchange reports it; the driver's own result adds nothing"
+        )]
         let _ = connection.await;
     });
     // Dropping this future (deadline, cancellation) closes the connection.
@@ -840,7 +872,10 @@ async fn read_body(
 ) -> Result<Zeroizing<Vec<u8>>, HttpError> {
     let mut out = Zeroizing::new(Vec::new());
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|_| HttpError::Transport { sent: true })?;
+        let frame = frame.map_err(|error| {
+            tracing::debug!(?error, "provider response body broke off");
+            HttpError::Transport { sent: true }
+        })?;
         let Ok(data) = frame.into_data() else {
             continue; // trailers
         };

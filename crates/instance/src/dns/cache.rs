@@ -49,7 +49,7 @@ impl Answer {
     }
 
     fn cost(&self) -> usize {
-        self.wire.len() + self.addrs.len() * std::mem::size_of::<IpAddr>() + ENTRY_OVERHEAD
+        self.wire.len() + self.addrs.len() * size_of::<IpAddr>() + ENTRY_OVERHEAD
     }
 }
 

@@ -44,6 +44,14 @@ pub struct Bucket {
     dropped: AtomicU64,
 }
 
+impl std::fmt::Debug for Bucket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Bucket")
+            .field("dropped", &self.dropped)
+            .finish_non_exhaustive()
+    }
+}
+
 struct State {
     /// Bits per second; `None`: no cap.
     bps: Option<u64>,
@@ -214,6 +222,7 @@ pub enum Direction {
 }
 
 /// The connection's caps, one bucket per direction.
+#[derive(Debug)]
 pub struct Shaper {
     download: Bucket,
     upload: Bucket,

@@ -1,7 +1,7 @@
 //! Spawning a worker: a failed exec is reported at once, and only the control socket reaches
 //! the child. In their own binary: a fork elsewhere in a test process would briefly hold other
 //! tests' descriptors (such as flocks) until its exec.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "the process tests inspect fd flags via fcntl(2)"
 )]
@@ -19,11 +19,10 @@ async fn the_child_sees_only_its_control_socket() {
     // An unrelated descriptor of the parent (not close-on-exec) must not leak into the child.
     let (leak, _keep) = UnixStream::pair().unwrap();
     let leaked = leak.as_raw_fd();
-    // SAFETY: clearing FD_CLOEXEC on a descriptor this test owns.
-    unsafe {
-        let flags = libc::fcntl(leaked, libc::F_GETFD);
-        libc::fcntl(leaked, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-    }
+    // SAFETY: reading the descriptor flags of a socket this test owns.
+    let flags = unsafe { libc::fcntl(leaked, libc::F_GETFD) };
+    // SAFETY: clearing FD_CLOEXEC on that socket.
+    unsafe { libc::fcntl(leaked, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
     let script = format!(
         "[ -e /dev/fd/3 ] && echo ok3 >&3; [ -e /dev/fd/{leaked} ] && echo leaked >&3; true"
     );

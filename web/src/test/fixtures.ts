@@ -218,7 +218,16 @@ export function rates(at: number, rx: number, tx = 0, generation = 1): LiveRates
 
 /** A strict sandbox's Apps over one interval (bit/s). */
 export function sandboxRates(rx: number, tx = 0, p: Partial<SandboxRates> = {}): SandboxRates {
-  return { rx_bps: rx, tx_bps: tx, active_tcp: 3_800, active_udp: 4_096, evicted: 0, table_full: 0, ...p };
+  return {
+    rx_bps: rx,
+    tx_bps: tx,
+    active_tcp: 3_800,
+    active_udp: 4_096,
+    evicted: 0,
+    table_full: 0,
+    apps: [],
+    ...p,
+  };
 }
 
 /** A managed App of connection i1 (strict isolation unless said otherwise); `state: null`: the manager has not said. */

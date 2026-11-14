@@ -194,6 +194,15 @@ pub(crate) struct Shared {
     pub(crate) stats: NetstackStats,
 }
 
+/// Shows the limits; the stack itself is behind its lock.
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Shared {
     /// What a flow of `class` opened now gets; a control flow (a DNS lookup, a health probe)
     /// its small, fixed share of it.
@@ -256,7 +265,7 @@ impl Shared {
             };
             let done = match meta.proto {
                 Proto::Tcp | Proto::TcpListen => {
-                    let socket = stack.sockets.get_mut::<stcp::Socket>(*handle);
+                    let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(*handle);
                     match socket.state() {
                         stcp::State::Closed | stcp::State::TimeWait | stcp::State::Listen => true,
                         _ if now - orphaned_at
@@ -418,14 +427,14 @@ impl Shared {
         if let Some(meta) = stack.flows.get_mut(&handle) {
             match meta.proto {
                 Proto::Tcp | Proto::TcpListen => {
-                    let socket = stack.sockets.get_mut::<stcp::Socket>(handle);
+                    let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(handle);
                     if meta.proto == Proto::TcpListen {
                         socket.abort();
                     } else if socket.is_open() {
                         socket.close();
                     }
                 }
-                Proto::Udp => stack.sockets.get_mut::<sudp::Socket>(handle).close(),
+                Proto::Udp => stack.sockets.get_mut::<sudp::Socket<'_>>(handle).close(),
             }
             meta.orphaned_at = Some(now);
         }
@@ -442,7 +451,7 @@ enum PumpNext {
 
 /// Cloneable handle to one Instance's netstack; this is the `TunnelConnector` the DNS, Gateway
 /// and Port-forward controllers use.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Netstack {
     pub(crate) shared: Arc<Shared>,
     shutdown: watch::Sender<bool>,
@@ -468,22 +477,27 @@ impl Netstack {
         let mut iface = Interface::new(config, &mut device, smoltcp::time::Instant::from_micros(0));
         let mut have_v4 = None;
         let mut have_v6 = None;
+        // The table holds more than the one IPv4 and one IPv6 address taken here.
+        let mut full = false;
         iface.update_ip_addrs(|addrs| {
             for net in addresses {
                 let cidr = IpCidr::new(net.ip().into(), net.prefix());
                 match net.ip() {
                     IpAddr::V4(a) if have_v4.is_none() => {
                         have_v4 = Some(a);
-                        let _ = addrs.push(cidr);
+                        full |= addrs.push(cidr).is_err();
                     }
                     IpAddr::V6(a) if have_v6.is_none() => {
                         have_v6 = Some(a);
-                        let _ = addrs.push(cidr);
+                        full |= addrs.push(cidr).is_err();
                     }
                     _ => {}
                 }
             }
         });
+        if full {
+            return Err(io::Error::other("interface address table full"));
+        }
         if have_v4.is_none() && have_v6.is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -491,18 +505,19 @@ impl Netstack {
             ));
         }
         // Medium::Ip has no neighbours; the default route only makes off-link destinations
-        // routable. The next-hop value is never put on the wire.
+        // routable. The next-hop value is never put on the wire. (`RouteTableFull` carries
+        // nothing beyond its name, which the error says.)
         if let Some(a) = have_v4 {
             iface
                 .routes_mut()
                 .add_default_ipv4_route(a)
-                .map_err(|_| io::Error::other("route table full"))?;
+                .map_err(|_table_full| io::Error::other("route table full"))?;
         }
         if let Some(a) = have_v6 {
             iface
                 .routes_mut()
                 .add_default_ipv6_route(a)
-                .map_err(|_| io::Error::other("route table full"))?;
+                .map_err(|_table_full| io::Error::other("route table full"))?;
         }
 
         let shared = Arc::new(Shared {
@@ -560,7 +575,7 @@ impl Netstack {
             if meta.class != class || meta.proto != Proto::Tcp {
                 continue;
             }
-            let socket = stack.sockets.get_mut::<stcp::Socket>(*handle);
+            let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(*handle);
             if let Some(ep) = socket.remote_endpoint()
                 && remote(SocketAddr::from(ep).ip().to_canonical())
             {
@@ -584,9 +599,9 @@ impl Netstack {
             }
             match meta.proto {
                 Proto::Tcp | Proto::TcpListen => {
-                    stack.sockets.get_mut::<stcp::Socket>(*handle).abort();
+                    stack.sockets.get_mut::<stcp::Socket<'_>>(*handle).abort();
                 }
-                Proto::Udp => stack.sockets.get_mut::<sudp::Socket>(*handle).close(),
+                Proto::Udp => stack.sockets.get_mut::<sudp::Socket<'_>>(*handle).close(),
             }
         }
         drop(guard);
@@ -713,7 +728,7 @@ impl Netstack {
             if meta.proto != Proto::Tcp {
                 continue;
             }
-            let socket = stack.sockets.get_mut::<stcp::Socket>(*handle);
+            let socket = stack.sockets.get_mut::<stcp::Socket<'_>>(*handle);
             if socket.local_endpoint().is_some_and(|ep| ep.port == port) {
                 socket.abort();
                 reset += 1;
@@ -779,15 +794,26 @@ impl Netstack {
         Ok(())
     }
 
+    /// Seal the gate for good and reset every flow: [`Self::set_gate`] with
+    /// [`GateState::Sealed`], which always takes effect (a sealed gate stays sealed), so there
+    /// is no state in force to check.
+    pub(crate) fn seal(&self) {
+        self.shared.gate.set(GateState::Sealed);
+        self.reset_flows(None);
+    }
+
     /// Stop the pump and reset every flow.
     pub fn shutdown(&self) {
-        let _ = self.set_gate(GateState::Sealed);
-        let _ = self.shutdown.send(true);
+        self.seal();
+        if self.shutdown.send(true).is_err() {
+            tracing::trace!("netstack pump already stopped");
+        }
     }
 }
 
 /// A tunnel port held for inbound TCP and/or UDP (see [`Netstack::reserve_inbound`]). Dropping
 /// it frees the port; listeners made from it never free it themselves.
+#[derive(Debug)]
 pub struct PortReservation {
     shared: Arc<Shared>,
     port: u16,
@@ -896,8 +922,10 @@ async fn pump(shared: Arc<Shared>, mut shutdown: watch::Receiver<bool>) {
     let handles: Vec<_> = stack.flows.keys().copied().collect();
     for handle in handles {
         match stack.flows[&handle].proto {
-            Proto::Tcp | Proto::TcpListen => stack.sockets.get_mut::<stcp::Socket>(handle).abort(),
-            Proto::Udp => stack.sockets.get_mut::<sudp::Socket>(handle).close(),
+            Proto::Tcp | Proto::TcpListen => {
+                stack.sockets.get_mut::<stcp::Socket<'_>>(handle).abort();
+            }
+            Proto::Udp => stack.sockets.get_mut::<sudp::Socket<'_>>(handle).close(),
         }
     }
     let now = stack.now();
@@ -932,7 +960,7 @@ mod tests {
             chan.clone(),
         )
         .unwrap();
-        let _ = net.set_gate(GateState::Open);
+        assert_eq!(net.set_gate(GateState::Open), GateState::Open);
         (net, chan)
     }
 

@@ -1,10 +1,7 @@
 //! The loopback TCP listener serves only this user's programs: the owner of each client socket
 //! is looked up once per connection, and anything but this user is closed unserved.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::io;
 use std::net::SocketAddr;
@@ -32,7 +29,10 @@ async fn serve(lookup: PeerLookup) -> SocketAddr {
 /// Two requests on one connection (keep-alive); everything that came back.
 async fn two_requests(addr: SocketAddr) -> String {
     let mut s = TcpStream::connect(addr).await.unwrap();
-    // Refused connections are closed unread, so the write itself may already fail.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "refused connections are closed unread, so the write itself may already fail; the answer read below is what counts"
+    )]
     let _ = s
         .write_all(
             b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n\
@@ -40,6 +40,10 @@ async fn two_requests(addr: SocketAddr) -> String {
         )
         .await;
     let mut out = Vec::new();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "whatever came back before the close, a reset or the time limit is the answer"
+    )]
     let _ = tokio::time::timeout(Duration::from_secs(10), s.read_to_end(&mut out)).await;
     String::from_utf8_lossy(&out).into_owned()
 }
@@ -136,6 +140,10 @@ async fn reachable_at(ip: std::net::IpAddr) -> bool {
     let port = plain.local_addr().unwrap().port();
     tokio::spawn(async move {
         if let Ok((mut s, _)) = plain.accept().await {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the probe may have given up meanwhile; whether the byte arrived is what reachable_at reports"
+            )]
             let _ = s.write_all(b"x").await;
         }
     });

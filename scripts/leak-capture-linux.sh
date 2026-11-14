@@ -49,24 +49,38 @@ set -euo pipefail
 SELF=$(readlink -f "$0")
 SCRIPTS=$(dirname "${SELF}")
 
-die() { echo "leak-capture: $*" >&2; exit 2; }
-usage() { sed -n '2,46p' "${SELF}" | sed 's/^# \{0,1\}//'; exit 2; }
+die() {
+  echo "leak-capture: $*" >&2
+  exit 2
+}
+usage() {
+  sed -n '2,46p' "${SELF}" | sed 's/^# \{0,1\}//'
+  exit 2
+}
 
 # ---------------------------------------------------------------------------------------------
 # Outer: on the host, as the user
 # ---------------------------------------------------------------------------------------------
 
 host_snapshot() {
-  echo "## ip route"; ip route show
-  echo "## ip -6 route"; ip -6 route show | sed -E 's/ expires [0-9]+sec//'
-  echo "## ip rule"; ip rule show
-  echo "## ip -6 rule"; ip -6 rule show
-  echo "## links (name, flags)"; ip -o link show | awk '{print $2, $3}'
+  echo "## ip route"
+  ip route show
+  echo "## ip -6 route"
+  ip -6 route show | sed -E 's/ expires [0-9]+sec//'
+  echo "## ip rule"
+  ip rule show
+  echo "## ip -6 rule"
+  ip -6 rule show
+  echo "## links (name, flags)"
+  ip -o link show | awk '{print $2, $3}'
   local resolv
   resolv=$(readlink -f /etc/resolv.conf) || true
-  echo "## /etc/resolv.conf (${resolv})"; cat /etc/resolv.conf
-  echo "## sha256"; sha256sum /etc/hosts /etc/nsswitch.conf /etc/environment 2>&1 || true
-  echo "## proxy environment"; env | grep -i '_proxy=' | sort || true
+  echo "## /etc/resolv.conf (${resolv})"
+  cat /etc/resolv.conf
+  echo "## sha256"
+  sha256sum /etc/hosts /etc/nsswitch.conf /etc/environment 2>&1 || true
+  echo "## proxy environment"
+  env | grep -i '_proxy=' | sort || true
   if command -v gsettings >/dev/null; then
     echo "## gsettings org.gnome.system.proxy mode"
     timeout 5 gsettings get org.gnome.system.proxy mode 2>&1 || true
@@ -93,13 +107,13 @@ outer() {
     devstack=${SRC}/scripts/dev-stack.sh
     source="src ${SRC}"
     # A synced tree without .git can name its commit in .commit.
-    commit=$(git -C "${SRC}" rev-parse HEAD 2>/dev/null || cat "${SRC}/.commit" 2>/dev/null \
-      || echo unknown)
+    commit=$(git -C "${SRC}" rev-parse HEAD 2>/dev/null || cat "${SRC}/.commit" 2>/dev/null ||
+      echo unknown)
   elif [[ -n "${BIN}" ]]; then
     devstack=${SCRIPTS}/dev-stack.sh
     source="bin ${BIN}"
-    commit=$(cat "${BIN}/.commit" 2>/dev/null || "${BIN}/vpnd" --version 2>/dev/null | head -1 \
-      || echo unknown)
+    commit=$(cat "${BIN}/.commit" 2>/dev/null || "${BIN}/vpnd" --version 2>/dev/null | head -1 ||
+      echo unknown)
   else
     die "give --src DIR or --bin DIR"
   fi
@@ -121,16 +135,16 @@ outer() {
   cp "${devstack}" "${W}/devroot/scripts/dev-stack.sh"
   ln -sfn "${BIN}" "${W}/devroot/target/release"
   command -v uuidgen >/dev/null || {
-    printf '#!/bin/sh\ncat /proc/sys/kernel/random/uuid\n' > "${W}/shim/uuidgen"
+    printf '#!/bin/sh\ncat /proc/sys/kernel/random/uuid\n' >"${W}/shim/uuidgen"
     chmod 755 "${W}/shim/uuidgen"
   }
   if [[ "${NIC}" = auto ]]; then
     if [[ -d /sys/module/dummy ]]; then NIC=dummy; else NIC=tun; fi
   fi
-  case "${NIC}" in dummy|tun) ;; *) die "--nic auto|dummy|tun" ;; esac
+  case "${NIC}" in dummy | tun) ;; *) die "--nic auto|dummy|tun" ;; esac
 
   echo "leak-capture: ${source} (commit ${commit}), base ${BASE}, NIC ${NIC}, output ${OUT}"
-  host_snapshot > "${OUT}/snapshots/host-before.txt"
+  host_snapshot >"${OUT}/snapshots/host-before.txt"
   LEAK_UID=$(id -u) || true
   LEAK_GID=$(id -g)
   export LEAK_OUT="${OUT}" LEAK_BASE="${BASE}" LEAK_NIC="${NIC}" LEAK_UID LEAK_GID \
@@ -138,7 +152,7 @@ outer() {
   local inner_rc=0 rc=0
   unshare --user --map-root-user --net --mount --pid --fork --mount-proc --kill-child \
     "${SELF}" --inner || inner_rc=$?
-  host_snapshot > "${OUT}/snapshots/host-after.txt"
+  host_snapshot >"${OUT}/snapshots/host-after.txt"
   # Product logs (no secrets by design) outlive the work directory; the lab keys do not.
   mkdir -p "${OUT}/logs/product"
   cp -p "${W}"/s/*.log "${OUT}/logs/product/" 2>/dev/null || true
@@ -172,25 +186,28 @@ inner() {
   mount --bind "${W}/run" /run
   [[ -L /var/run ]] || mount --bind "${W}/run" /var/run
   case "${resolv}" in
-    /run/*|/var/run/*)
-      local rel=${resolv#/run/}; rel=${rel#/var/run/}
+    /run/* | /var/run/*)
+      local rel=${resolv#/run/}
+      rel=${rel#/var/run/}
       mkdir -p "${W}/run/$(dirname "${rel}")"
-      printf 'nameserver 192.0.2.53\n' > "${W}/run/${rel}" ;;
+      printf 'nameserver 192.0.2.53\n' >"${W}/run/${rel}"
+      ;;
     *)
-      printf 'nameserver 192.0.2.53\n' > "${W}/resolv.conf"
-      mount --bind "${W}/resolv.conf" "${resolv}" ;;
+      printf 'nameserver 192.0.2.53\n' >"${W}/resolv.conf"
+      mount --bind "${W}/resolv.conf" "${resolv}"
+      ;;
   esac
 
   # --- network: lo, and one fake NIC that every leak would have to use ---
   local s
   for s in default all; do
-    echo 0 > "/proc/sys/net/ipv6/conf/${s}/accept_ra"
-    echo 0 > "/proc/sys/net/ipv6/conf/${s}/router_solicitations"
-    echo 0 > "/proc/sys/net/ipv6/conf/${s}/dad_transmits"
-    echo 0 > "/proc/sys/net/ipv6/conf/${s}/autoconf"
+    echo 0 >"/proc/sys/net/ipv6/conf/${s}/accept_ra"
+    echo 0 >"/proc/sys/net/ipv6/conf/${s}/router_solicitations"
+    echo 0 >"/proc/sys/net/ipv6/conf/${s}/dad_transmits"
+    echo 0 >"/proc/sys/net/ipv6/conf/${s}/autoconf"
   done
   # No link-local address on the NIC: no kernel ND/MLD/RS to tell apart from product traffic.
-  echo 1 > /proc/sys/net/ipv6/conf/default/addr_gen_mode
+  echo 1 >/proc/sys/net/ipv6/conf/default/addr_gen_mode
   ip link set lo up
   python3 "${LEAK_SCRIPTS}/leak_capture.py" capture --iface lo --name lo --skip-outgoing \
     --ring-mb 128 --dir "${caps}" 2>>"${LEAK_OUT}/logs/capture-lo.log" &
@@ -208,7 +225,10 @@ inner() {
     python3 "${LEAK_SCRIPTS}/leak_capture.py" capture --iface nic0 --name nic --tun-nic \
       --dir "${caps}" 2>>"${LEAK_OUT}/logs/capture-nic.log" &
     nic_cap=$!
-    for _ in $(seq 1 100); do ip link show nic0 >/dev/null 2>&1 && break; sleep 0.05; done
+    for _ in $(seq 1 100); do
+      ip link show nic0 >/dev/null 2>&1 && break
+      sleep 0.05
+    done
   fi
   ip link set "${nicdev}" multicast off
   ip addr add 192.0.2.2/24 dev "${nicdev}"
@@ -217,8 +237,14 @@ inner() {
   ip route add default via 192.0.2.1 dev "${nicdev}"
   ip -6 route add default via 2001:db8:1::1 dev "${nicdev}"
   for n in lo nic; do
-    for _ in $(seq 1 100); do [[ -f "${caps}/${n}.ready" ]] && break; sleep 0.05; done
-    [[ -f "${caps}/${n}.ready" ]] || { echo "capture ${n} did not start" >&2; exit 3; }
+    for _ in $(seq 1 100); do
+      [[ -f "${caps}/${n}.ready" ]] && break
+      sleep 0.05
+    done
+    [[ -f "${caps}/${n}.ready" ]] || {
+      echo "capture ${n} did not start" >&2
+      exit 3
+    }
   done
 
   # --- the scenarios, as the user (nested user namespace: no capabilities here) ---
@@ -229,8 +255,8 @@ inner() {
     USER="${drv_user}" \
     PATH="${W}/shim:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     python3 "${LEAK_SCRIPTS}/leak_scenarios.py" drive --out "${LEAK_OUT}" --work "${W}" \
-      --devroot "${W}/devroot" --base "${LEAK_BASE}" --source "${LEAK_SOURCE}" \
-      --commit "${LEAK_COMMIT}" --nic "${LEAK_NIC}" --nic-dev "${nicdev}" \
+    --devroot "${W}/devroot" --base "${LEAK_BASE}" --source "${LEAK_SOURCE}" \
+    --commit "${LEAK_COMMIT}" --nic "${LEAK_NIC}" --nic-dev "${nicdev}" \
     2>&1 | tee "${LEAK_OUT}/logs/driver.log" || drv_rc=$?
 
   # --- wrap up: the NIC's own drop counter, stop the captures, list leftovers ---
@@ -240,26 +266,53 @@ d = json.load(sys.stdin)[0]
 s = d.get("stats64") or d.get("stats") or {}
 print(json.dumps({"t": time.time(), "kind": "nic_queue_drops", "dev": d["ifname"],
                   "dropped": s.get("tx", {}).get("dropped", 0), "tx": s.get("tx", {})}))
-' >> "${LEAK_OUT}/results/events.jsonl" || true
+' >>"${LEAK_OUT}/results/events.jsonl" || true
   kill -INT "${lo_cap}" "${nic_cap}" 2>/dev/null || true
   wait "${lo_cap}" "${nic_cap}" 2>/dev/null || true
-  ps -eo pid,ppid,args > "${LEAK_OUT}/logs/processes-at-end.txt" 2>&1 || true
+  ps -eo pid,ppid,args >"${LEAK_OUT}/logs/processes-at-end.txt" 2>&1 || true
   exit "${drv_rc}"
 }
 
 ROLE=outer SRC="" BIN="" BUILD=0 BASE=28765 OUT="" NIC=auto KEEP=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --src) SRC=$(readlink -f "$2"); shift 2 ;;
-    --bin) BIN=$(readlink -f "$2"); shift 2 ;;
-    --build) BUILD=1; shift ;;
-    --base) BASE=$2; shift 2 ;;
-    --out) OUT=$2; shift 2 ;;
-    --nic) NIC=$2; shift 2 ;;
-    --keep-work) KEEP=1; shift ;;
-    --inner) ROLE=inner; shift ;;
-    -h|--help) usage ;;
-    *) echo "unknown option: $1" >&2; usage ;;
+    --src)
+      SRC=$(readlink -f "$2")
+      shift 2
+      ;;
+    --bin)
+      BIN=$(readlink -f "$2")
+      shift 2
+      ;;
+    --build)
+      BUILD=1
+      shift
+      ;;
+    --base)
+      BASE=$2
+      shift 2
+      ;;
+    --out)
+      OUT=$2
+      shift 2
+      ;;
+    --nic)
+      NIC=$2
+      shift 2
+      ;;
+    --keep-work)
+      KEEP=1
+      shift
+      ;;
+    --inner)
+      ROLE=inner
+      shift
+      ;;
+    -h | --help) usage ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage
+      ;;
   esac
 done
 if [[ "${ROLE}" = inner ]]; then inner; else outer; fi

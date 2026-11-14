@@ -15,9 +15,15 @@
 
 ```sh
 cargo fetch --locked                                    # 之後的 cargo 指令都帶 --offline
-cargo install cargo-deny --locked --root target/tools   # 檢查工具裝在 repo 內，不裝到全域
+# 檢查工具裝在 repo 內（target/tools，不進 Git），不裝到全域
+cargo install cargo-deny taplo-cli typos-cli --locked --root target/tools
+target/tools/bin/cargo-deny --locked fetch              # 安全公告資料庫（之後離線檢查）
 (cd web && pnpm install --frozen-lockfile)
+(cd scripts && uv sync --frozen)                        # ruff、mypy、shellcheck、shfmt（scripts/uv.lock）
 ```
+
+- **OSV-Scanner**：從 [官方 release](https://github.com/google/osv-scanner/releases) 下載本機平台的執行檔與 `osv-scanner_SHA256SUMS`，比對雜湊後放進 `target/tools/bin/osv-scanner`。資料庫下載一次：`OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=target/tools/osv-db target/tools/bin/osv-scanner scan source --offline --download-offline-databases -L Cargo.lock -L scripts/uv.lock`。
+- **Semgrep**（裝在使用者自己的環境）：官方規則集只供內部使用，所以抓到 `target/tools/semgrep-rules/`（不進 Git、不隨任何產物散布）：`p/rust`、`r/rust`、`p/python`、`r/bash`，網址是 `https://semgrep.dev/c/<規則集>`。
 
 ## 靜態檢查
 
@@ -27,10 +33,11 @@ cargo install cargo-deny --locked --root target/tools   # 檢查工具裝在 rep
 |---|---|
 | Rust workspace | `cargo fmt --all -- --check`<br>`cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings`<br>`target/tools/bin/cargo-deny --locked check` |
 | Rust，macOS 專屬的程式碼 | 在 Mac 上跑上一列。在 Linux 上只能檢查相依不需要 C 編譯器的 crate（一次性：`rustup target add aarch64-apple-darwin`）：<br>`cargo clippy -p vpn-platform -p vpn-ipc -p vpn-domain -p vpnctl -p vpn-ssh -p vpn-sync -p vpn-performance -p vpn-web-provide --all-targets --all-features --locked --offline --target aarch64-apple-darwin -- -D warnings` |
-| scripts | `scripts/check.sh`：ruff format／lint、`mypy --strict`、shellcheck，以及介面語言的檢查 `scripts/text_guard.py`（Rust 產品程式碼裡寫給人看的文字都要有三種語言） |
+| scripts | `scripts/check.sh`：ruff format／lint、strict mypy、ShellCheck（全部選項）、shfmt，以及介面語言的檢查 `scripts/text_guard.py`（Rust 產品程式碼裡寫給人看的文字都要有三種語言） |
+| 全 repo 的衛生檢查 | `target/tools/bin/typos`（拼字，專案用字在 `_typos.toml`）<br>`target/tools/bin/taplo fmt --check`、`target/tools/bin/taplo check`（TOML，風格在 `.taplo.toml`，不抓 schema）<br>`OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=target/tools/osv-db target/tools/bin/osv-scanner scan source --offline -L Cargo.lock -L scripts/uv.lock`<br>`semgrep scan --metrics off --disable-version-check --error --no-rewrite-rule-ids --exclude-rule rust.lang.security.unsafe-usage.unsafe-usage --config target/tools/semgrep-rules/p-rust.yaml --config target/tools/semgrep-rules/r-rust.yaml crates`，以及 `--config …/p-python.yaml --config …/r-bash.yaml scripts`：`unsafe-usage` 只是把每個 `unsafe` 區塊列出來請人看，這件事 Clippy 的 `undocumented_unsafe_blocks`、`multiple_unsafe_ops_per_block` 與 `unsafe_code` 的 `expect` 已經強制（每個 unsafe 操作單獨一塊、寫明 SAFETY）；其他規則的例外寫在那一行的 `nosemgrep` 並附理由 |
 | web | `pnpm format:check`、`pnpm lint`（typed ESLint，0 warning；接著 dependency-cruiser 依 `web/.dependency-cruiser.json` 檢查 `src` 的分層、循環引用與沒有被引用的檔案）、`pnpm typecheck`、`pnpm build` |
 
-規則本身在各自的設定檔：`Cargo.toml` 的 `[workspace.lints]`（warnings、`unsafe_code`、Clippy 的 all／pedantic／nursery／cargo、`allow_attributes_without_reason`，以及 Cargo 自己的 lint）、`clippy.toml`、`deny.toml`、`scripts/pyproject.toml`、`web/eslint.config.ts`、`web/tsconfig.json`。不放寬既有的規則；需要例外時，在那一處寫明理由。
+規則本身在各自的設定檔：`Cargo.toml` 的 `[workspace.lints]`（warnings、`unsafe_code`、rustc 的 `missing_debug_implementations`／`unused_qualifications`／`rust_2018_idioms` 等、Clippy 的 all／pedantic／nursery／cargo 與 `expect_used`、`panic`、`print_stdout`、`string_slice`、`let_underscore_must_use`、`map_err_ignore`、`allow_attributes` 等限制類 lint，以及 Cargo 自己的 lint）、`clippy.toml`、`rustfmt.toml`、`deny.toml`、`scripts/pyproject.toml`、`web/eslint.config.ts`、`web/tsconfig.json`。不放寬既有的規則；需要例外時，在那一處以 `#[expect(…, reason = "…")]`（Rust）或附理由的註解寫明，不用 `#[allow]`。持有秘密（金鑰、密碼、token、帳號）的型別手寫 `Debug`，不印出秘密。
 
 ## 測試
 

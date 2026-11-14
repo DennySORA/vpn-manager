@@ -4,6 +4,8 @@
 //! (`russh::client::connect_stream`). Nothing else may open a socket or resolve a name — checked
 //! on the source, so a direct path cannot slip in unnoticed.
 
+#![cfg(test)]
+
 use std::path::Path;
 
 /// Calls that would reach the network (or the host resolver) directly.

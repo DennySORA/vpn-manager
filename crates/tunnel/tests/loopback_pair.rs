@@ -1,6 +1,7 @@
 //! Two real tunnels (client + server) over loopback UDP with `GotaTun`'s real `WireGuard` crypto.
 //! Covers the core data-plane contract: TCP (v4/v6) and UDP through the tunnel, and that a closed
 //! gate refuses new payload flows and resets existing ones.
+#![cfg(test)]
 
 use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
@@ -63,8 +64,10 @@ async fn impaired_path(server: SocketAddr, impairment: PathImpairment) -> Socket
         tokio::spawn(async move {
             while let Some((at, datagram)) = rx.recv().await {
                 tokio::time::sleep_until(at).await;
-                if let Some(dst) = to() {
-                    let _ = out.send_to(&datagram, dst).await;
+                if let Some(dst) = to()
+                    && out.send_to(&datagram, dst).await.is_err()
+                {
+                    tracing::trace!("relay: a datagram it cannot send is lost, as on a real path");
                 }
             }
         });
@@ -91,7 +94,12 @@ async fn impaired_path(server: SocketAddr, impairment: PathImpairment) -> Socket
                 {
                     continue;
                 }
-                let _ = line.try_send((Instant::now() + impairment.one_way, buf[..n].to_vec()));
+                if line
+                    .try_send((Instant::now() + impairment.one_way, buf[..n].to_vec()))
+                    .is_err()
+                {
+                    tracing::trace!("relay: delay line full, datagram dropped");
+                }
             }
         });
     };
@@ -168,8 +176,8 @@ async fn pair_over(impairment: PathImpairment) -> Pair {
     .expect("client tunnel");
     drop(psk);
 
-    let _ = server.netstack().set_gate(GateState::Open);
-    let _ = client.netstack().set_gate(GateState::Open);
+    assert_eq!(server.netstack().set_gate(GateState::Open), GateState::Open);
+    assert_eq!(client.netstack().set_gate(GateState::Open), GateState::Open);
     client
         .handshake(Duration::from_secs(5))
         .await
@@ -199,7 +207,9 @@ fn spawn_tcp_echo(server: &Tunnel, port: u16) {
                         }
                     }
                 }
-                let _ = stream.shutdown().await;
+                if stream.shutdown().await.is_err() {
+                    tracing::trace!("echo: the connection ended before its shutdown");
+                }
             });
         }
     });
@@ -242,12 +252,7 @@ async fn tcp_ipv4_and_ipv6_echo_through_real_wireguard() {
     assert!(peer.last_handshake.is_some());
     assert!(peer.tx_bytes > 4 * 1024 * 1024, "WireGuard bytes counted");
     let underlay = pair.client.underlay_stats();
-    assert_eq!(
-        underlay
-            .blocked_tx
-            .load(std::sync::atomic::Ordering::Relaxed),
-        0
-    );
+    assert_eq!(underlay.blocked_tx.load(Relaxed), 0);
 }
 
 /// `GotaTun` upgrade gate (docs/decisions/0001, "UDP recreate"): the underlay socket is closed and
@@ -321,12 +326,11 @@ async fn ipv6_destination_is_refused_when_tunnel_has_no_ipv6() {
     })
     .await
     .unwrap();
-    let _ = tunnel.netstack().set_gate(GateState::Open);
+    assert_eq!(tunnel.netstack().set_gate(GateState::Open), GateState::Open);
     let err = tunnel
         .netstack()
         .connect_tcp("[2001:db8::1]:443".parse().unwrap(), FlowClass::Payload)
         .await
-        .err()
-        .expect("IPv6 must be denied, not routed elsewhere");
+        .expect_err("IPv6 must be denied, not routed elsewhere");
     assert_eq!(err.kind(), std::io::ErrorKind::NetworkUnreachable);
 }

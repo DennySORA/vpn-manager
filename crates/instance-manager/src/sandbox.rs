@@ -24,8 +24,8 @@ use vpn_platform::apps::{IsolationBackend, SandboxProvider};
 use vpn_platform::sandbox::{AppEntry, ORPHAN_GRACE, SandboxLease, SandboxSpec};
 use vpn_sync::Mutex;
 
-use crate::Ctx;
 use crate::apps::Apps;
+use crate::{Ctx, remove_file_if_present};
 
 /// Managed Apps' way into the strict sandboxes (`AppIsolation::StrictNetns`): what each
 /// Instance's sandbox offers them, kept current by the Instance's actor while it holds the
@@ -86,7 +86,8 @@ impl SandboxProvider for StrictApps {
         if !cfg!(target_os = "linux") {
             return Err(vpn_platform::sandbox::unsupported());
         }
-        let id: InstanceId = instance_id.parse().map_err(|_| {
+        let id: InstanceId = instance_id.parse().map_err(|e| {
+            tracing::debug!(error = %e, "an app names its connection with a malformed id");
             tr!(
                 "This connection was not found",
                 "找不到這條連線",
@@ -272,6 +273,13 @@ pub async fn leftover(ctx: &Ctx, id: InstanceId) -> Option<SandboxLease> {
 /// they are ours and belong to a strict Instance that still exists are returned for adoption
 /// (the newest per Instance); those that prove they are ours but are no longer wanted are torn
 /// down, Apps first. Anything that does not prove it is ours is left alone.
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        clippy::zero_sized_map_values,
+        reason = "off Linux a lease is an uninhabited stub and `discover` finds no sandbox: this map, shaped for Linux leases, stays empty"
+    )
+)]
 pub async fn adopt_all(ctx: &Ctx, specs: &[InstanceSpec]) -> HashMap<InstanceId, SandboxLease> {
     let mut adopted: HashMap<InstanceId, SandboxLease> = HashMap::new();
     let installation = ctx.store.installation_id().to_string();
@@ -283,7 +291,7 @@ pub async fn adopt_all(ctx: &Ctx, specs: &[InstanceSpec]) -> HashMap<InstanceId,
                 if matches!(&e, vpn_platform::sandbox::SandboxError::Io(io)
                     if io.kind() == std::io::ErrorKind::ConnectionRefused)
                 {
-                    let _ = std::fs::remove_file(&socket);
+                    remove_file_if_present(&socket);
                 } else {
                     tracing::warn!(socket = %socket.display(), error = %e, "sandbox not adopted");
                 }

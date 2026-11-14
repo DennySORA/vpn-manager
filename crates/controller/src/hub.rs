@@ -54,6 +54,14 @@ pub struct Hub {
     closing: CancellationToken,
 }
 
+impl std::fmt::Debug for Hub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hub")
+            .field("boot", &self.boot)
+            .finish_non_exhaustive()
+    }
+}
+
 fn seq_of(id: &str) -> Option<u64> {
     id.split_once(':')?.1.parse().ok()
 }
@@ -109,7 +117,10 @@ impl Hub {
         }
         ring.events.push_back(env.clone());
         // Under the ring's lock, so a stream that starts meanwhile gets it once (see `resume`).
-        let _ = self.tx.send(env);
+        if self.tx.send(env).is_err() {
+            // No stream is open: only the ring keeps it, for a stream that resumes later.
+            tracing::trace!("event kept in the ring only: no live stream");
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Envelope> {

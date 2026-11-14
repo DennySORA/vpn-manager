@@ -16,10 +16,7 @@ use vpn_store::{Store, StoreError};
 /// of being retried in a loop.
 #[derive(Debug)]
 pub enum ResolveError {
-    Deterministic {
-        code: &'static str,
-        message: vpn_domain::Text,
-    },
+    Deterministic { code: &'static str, message: Text },
     Transient(StoreError),
 }
 
@@ -32,13 +29,14 @@ impl From<StoreError> for ResolveError {
 /// Fault code of a start whose `WireGuard` key is not in the vault (or cannot be opened).
 pub const KEY_MISSING: &str = "KEY_MISSING";
 
-fn det(code: &'static str, message: impl Into<vpn_domain::Text>) -> ResolveError {
+fn det(code: &'static str, message: impl Into<Text>) -> ResolveError {
     ResolveError::Deterministic {
         code,
         message: message.into(),
     }
 }
 
+#[derive(Debug)]
 pub struct Resolved {
     /// What the worker takes from the configuration, to compare with later saves.
     pub inputs: crate::inputs::WorkerInputs,
@@ -75,6 +73,7 @@ impl Resolved {
 }
 
 /// The worker configuration minus generation and lock path (known only after reservation).
+#[derive(Debug)]
 pub struct WorkerConfigParts {
     pub tunnel: TunnelSpec,
     pub dns: DnsSpec,

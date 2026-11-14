@@ -3,7 +3,7 @@
 //! Used to tell a client on this host from another host (a connection from one of these
 //! addresses never left the machine, whatever the address looks like) and to show the
 //! addresses other hosts reach this one at.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "interface enumeration calls getifaddrs/freeifaddrs via libc"
 )]
@@ -31,22 +31,24 @@ pub fn addresses() -> io::Result<Vec<IpAddr>> {
             // SAFETY: ifa_addr points at a sockaddr whose family says which type it is.
             let family = i32::from(unsafe { (*ifa.ifa_addr).sa_family });
             if family == libc::AF_INET {
-                // SAFETY: an AF_INET address is a sockaddr_in.
                 #[expect(
                     clippy::cast_ptr_alignment,
                     reason = "getifaddrs allocates each address aligned for its family's sockaddr type"
                 )]
-                let sin = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in) };
+                let sin = ifa.ifa_addr as *const libc::sockaddr_in;
+                // SAFETY: an AF_INET address is a sockaddr_in.
+                let sin = unsafe { &*sin };
                 out.push(IpAddr::V4(Ipv4Addr::from(u32::from_be(
                     sin.sin_addr.s_addr,
                 ))));
             } else if family == libc::AF_INET6 {
-                // SAFETY: an AF_INET6 address is a sockaddr_in6.
                 #[expect(
                     clippy::cast_ptr_alignment,
                     reason = "getifaddrs allocates each address aligned for its family's sockaddr type"
                 )]
-                let sin6 = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in6) };
+                let sin6 = ifa.ifa_addr as *const libc::sockaddr_in6;
+                // SAFETY: an AF_INET6 address is a sockaddr_in6.
+                let sin6 = unsafe { &*sin6 };
                 out.push(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)));
             }
         }

@@ -1,6 +1,6 @@
 //! The manager's side of a sandbox: creating it, adopting it after a restart, handing its
 //! descriptors to workers, starting Apps in it, tearing it down.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns lease fds: pidfd syscalls, fcntl and poll via libc"
 )]
@@ -114,6 +114,7 @@ fn reported_start(identity: &SandboxIdentity) -> String {
 }
 
 /// Descriptors a worker of this sandbox needs to enter it. Dropped after the spawn.
+#[derive(Debug)]
 pub struct WorkerEntry {
     pub(crate) user: OwnedFd,
     pub(crate) net: OwnedFd,
@@ -121,6 +122,7 @@ pub struct WorkerEntry {
 }
 
 /// One connection's sandbox, held by the manager. See the module documentation.
+#[derive(Debug)]
 pub struct SandboxLease {
     identity: SandboxIdentity,
     holder: ProcessIdentity,
@@ -148,7 +150,7 @@ async fn exchange(
     tokio::task::spawn_blocking(move || {
         let socket = control
             .lock()
-            .map_err(|_| io::Error::other("holder connection poisoned"))?;
+            .map_err(|_poisoned| io::Error::other("holder connection poisoned"))?;
         let raw: Vec<RawFd> = fds.iter().map(AsRawFd::as_raw_fd).collect();
         wire::send_json(socket.as_raw_fd(), &request, &raw)?;
         drop(fds);
@@ -323,9 +325,9 @@ impl SandboxLease {
             _ => return Err(SandboxError::Failed("sandbox refused to attach".into())),
         }
         let control = Arc::try_unwrap(control)
-            .map_err(|_| SandboxError::Failed("holder connection still in use".into()))?
+            .map_err(|_shared| SandboxError::Failed("holder connection still in use".into()))?
             .into_inner()
-            .map_err(|_| SandboxError::Failed("holder connection poisoned".into()))?;
+            .map_err(|_poisoned| SandboxError::Failed("holder connection poisoned".into()))?;
         let rendezvous = Some(socket.to_path_buf());
         let lease = Self::from_parts(control, pid, identity, fds, rendezvous, tunes)?;
         tracing::info!(
@@ -516,13 +518,18 @@ impl SandboxLease {
         let mut gone = matches!(asked, Ok(Ok(_)))
             && wait_exit(&self.pidfd, grace + Duration::from_secs(2)).await;
         if !gone {
-            let _ = pidfd_signal(&self.pidfd, libc::SIGKILL);
+            if let Err(e) = pidfd_signal(&self.pidfd, libc::SIGKILL) {
+                tracing::debug!(error = %e, "SIGKILL to the sandbox holder failed");
+            }
             gone = wait_exit(&self.pidfd, Duration::from_secs(5)).await;
         }
         if gone {
             // A holder that was killed could not remove its socket file.
-            if let Some(path) = &self.rendezvous {
-                let _ = std::fs::remove_file(path);
+            if let Some(path) = &self.rendezvous
+                && let Err(e) = std::fs::remove_file(path)
+                && e.kind() != io::ErrorKind::NotFound
+            {
+                tracing::debug!(error = %e, "rendezvous socket not removed");
             }
             tracing::info!(
                 instance = %self.identity.instance_id,
@@ -617,11 +624,10 @@ async fn spawn_on(
     // identity is then unknown, not invented.
     let tree_init = identify(init).ok();
     let identity = identify(app).ok();
-    // SAFETY: plain fcntl on a descriptor we own.
-    unsafe {
-        let flags = libc::fcntl(mine.as_raw_fd(), libc::F_GETFL);
-        libc::fcntl(mine.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
-    }
+    // SAFETY: reading the status flags of a descriptor we own.
+    let flags = unsafe { libc::fcntl(mine.as_raw_fd(), libc::F_GETFL) };
+    // SAFETY: making that descriptor non-blocking.
+    unsafe { libc::fcntl(mine.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
     // SAFETY: an `OwnedFd` stays open until the `AsyncFd` owning it is dropped.
     let report = unsafe { AsyncFd::register_with_interest(mine, Interest::READABLE) }
         .map_err(io::Error::from)?;
@@ -697,6 +703,7 @@ async fn identified(socket: &Path) -> Result<Identified, SandboxError> {
 ///
 /// The manager keeps managing it. This is for diagnostics such as `vpnd sandbox-exec`, and for
 /// recovery, which tells a sandbox in use from a leftover by [`SandboxClient::managed`].
+#[derive(Debug)]
 pub struct SandboxClient {
     control: Arc<Mutex<OwnedFd>>,
     identity: SandboxIdentity,
@@ -791,8 +798,12 @@ async fn start_holder(
         .await
         .is_err()
     {
-        let _ = first.start_kill();
-        let _ = first.wait().await;
+        if let Err(e) = first.start_kill() {
+            tracing::debug!(error = %e, "the sandbox holder's first process not killed");
+        }
+        if let Err(e) = first.wait().await {
+            tracing::debug!(error = %e, "the sandbox holder's first process not reaped");
+        }
     }
     let (reply, fds, creds) = result
         .map_err(|e| SandboxError::Failed(format!("sandbox holder did not start: {e}").into()))?;
@@ -802,9 +813,9 @@ async fn start_holder(
                 .map(|c| c.pid.cast_unsigned())
                 .ok_or_else(|| SandboxError::Failed("no holder credentials".into()))?;
             let control = Arc::try_unwrap(control)
-                .map_err(|_| SandboxError::Failed("holder connection still in use".into()))?
+                .map_err(|_shared| SandboxError::Failed("holder connection still in use".into()))?
                 .into_inner()
-                .map_err(|_| SandboxError::Failed("holder connection poisoned".into()))?;
+                .map_err(|_poisoned| SandboxError::Failed("holder connection poisoned".into()))?;
             Ok((control, pid, *identity, fds))
         }
         holder::Reply::Failed {
@@ -865,6 +876,7 @@ pub fn discover(run: &Path) -> Vec<PathBuf> {
 }
 
 /// A process started in a sandbox.
+#[derive(Debug)]
 pub struct SandboxProcess {
     pid: u32,
     identity: Option<ProcessIdentity>,
@@ -945,11 +957,16 @@ impl SandboxProcess {
 
     /// SIGTERM to the tree, then SIGKILL after `grace`; returns once the tree is gone.
     pub async fn terminate(mut self, grace: Duration) -> Option<ExitStatus> {
-        let _ = self.signal(libc::SIGTERM);
+        // A tree that already ended takes no signal; the wait below tells either way.
+        if let Err(e) = self.signal(libc::SIGTERM) {
+            tracing::debug!(error = %e, "SIGTERM to the App tree failed");
+        }
         if let Ok(status) = tokio::time::timeout(grace, self.wait()).await {
             return status;
         }
-        let _ = self.kill_tree();
+        if let Err(e) = self.kill_tree() {
+            tracing::debug!(error = %e, "SIGKILL to the App tree failed");
+        }
         tokio::time::timeout(Duration::from_secs(5), self.wait())
             .await
             .unwrap_or(self.status)

@@ -499,7 +499,8 @@ pub async fn prepare(
         })?;
     let local = tokio::task::spawn_blocking(move || LocalDir::open(&local_path, true))
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::warn!(job = %job.id, error = %e, "checking the local folder did not finish");
             problem(
                 "/local_dir",
                 "LOCAL_DIR_UNUSABLE",
@@ -550,7 +551,8 @@ pub async fn prepare(
                     )
                 })
                 .await
-                .map_err(|_| {
+                .map_err(|e| {
+                    tracing::warn!(job = %job.id, error = %e, "reading the key did not finish");
                     problem(
                         "/identity_file",
                         "KEY_UNUSABLE",
@@ -641,7 +643,7 @@ fn show_queue(cell: &StatusCell, st: &Sched) {
 }
 
 impl Core {
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the one constructor of a running job: every argument is a part it owns, passed once by the engine"
     )]
@@ -1354,10 +1356,13 @@ impl Core {
             cur = parent;
         }
         for p in parts.iter().rev() {
-            if sftp.stat(p.clone()).await.is_err() {
-                let _ = sftp
+            // The folder itself, made last, decides: a parent that could not be made fails it.
+            if sftp.stat(p.clone()).await.is_err()
+                && let Err(e) = sftp
                     .mkdir(p.clone(), russh_sftp::protocol::FileAttributes::empty())
-                    .await;
+                    .await
+            {
+                tracing::debug!(job = %self.job.id, error = %e, "remote parent folder not created");
             }
         }
         match sftp
@@ -1530,7 +1535,7 @@ impl Core {
             Ok(())
         };
         let r = listing.await;
-        let _ = sftp.close(handle).await;
+        session::close_handle(sftp, handle).await;
         r?;
         // Files of unknown size last; the same sizes by name, so the order does not depend on
         // the server's.

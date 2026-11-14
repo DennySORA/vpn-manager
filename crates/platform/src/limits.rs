@@ -17,7 +17,7 @@
 //! counts every process of the user, and there is no CPU-share limit. Memory, CPU and process
 //! limits are unsupported there. **Open files** (`RLIMIT_NOFILE`, each process on its own) work
 //! on both.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "resource limits call getrlimit/setrlimit/prlimit64, statfs and getxattr via libc"
 )]
@@ -40,7 +40,7 @@ pub enum Group {
 impl Group {
     #[cfg_attr(
         not(target_os = "linux"),
-        allow(dead_code, reason = "only the Linux cgroup code names the directories")
+        expect(dead_code, reason = "only the Linux cgroup code names the directories")
     )]
     const fn dir(self) -> &'static str {
         match self {
@@ -60,6 +60,7 @@ pub struct TreeLimits {
 }
 
 /// The resource control this manager has, decided once at start.
+#[derive(Debug)]
 pub struct ResourceControl {
     cgroups: Result<sys::Cgroups, Text>,
 }
@@ -192,6 +193,7 @@ impl ResourceControl {
 }
 
 /// One tree's cgroup.
+#[derive(Debug)]
 pub struct Leaf {
     path: PathBuf,
     /// Below the delegated cgroup: `workers/<id>-<generation>`, `apps/<id>`.
@@ -370,6 +372,7 @@ mod sys {
         clippy::struct_excessive_bools,
         reason = "one independent flag per cgroup controller found delegated"
     )]
+    #[derive(Debug)]
     pub(super) struct Cgroups {
         root: PathBuf,
         pub(super) rel: String,
@@ -549,9 +552,16 @@ mod sys {
                 }
                 // Leaves an earlier manager left: empty ones go (a populated one cannot).
                 if let Ok(entries) = std::fs::read_dir(&dir) {
-                    for e in entries.flatten() {
-                        if e.path().is_dir() {
-                            let _ = std::fs::remove_dir(e.path());
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir()
+                            && let Err(e) = std::fs::remove_dir(&path)
+                        {
+                            tracing::debug!(
+                                cgroup = %path.display(),
+                                error = %e,
+                                "leftover cgroup kept"
+                            );
                         }
                     }
                 }
@@ -605,7 +615,14 @@ mod sys {
             let (enforced, unenforced) = match result {
                 Ok(v) => v,
                 Err(e) => {
-                    let _ = std::fs::remove_dir(&path);
+                    // Not configured, so never used: removed again where possible.
+                    if let Err(removal) = std::fs::remove_dir(&path) {
+                        tracing::debug!(
+                            cgroup = %path.display(),
+                            error = %removal,
+                            "unconfigured cgroup not removed"
+                        );
+                    }
                     return Err(e);
                 }
             };
@@ -646,8 +663,11 @@ mod sys {
                     if self.swap {
                         write(&path.join("memory.swap.max"), "0")?;
                     }
-                    // One OOM ends the whole tree, not a part of it.
-                    let _ = write(&path.join("memory.oom.group"), "1");
+                    // One OOM ends the whole tree, not a part of it (where the kernel offers it;
+                    // the memory limit holds either way).
+                    if let Err(e) = write(&path.join("memory.oom.group"), "1") {
+                        tracing::debug!(error = %e.en, "memory.oom.group not set");
+                    }
                 } else {
                     unenforced.push(missing(LimitKind::Memory, "memory"));
                 }
@@ -714,7 +734,8 @@ mod sys {
             rlim_cur: 0,
             rlim_max: 0,
         };
-        let pid = libc::pid_t::try_from(pid).map_err(|_| std::io::Error::other("pid"))?;
+        let pid =
+            libc::pid_t::try_from(pid).map_err(|_out_of_range| std::io::Error::other("pid"))?;
         // SAFETY: prlimit64 with valid pointers to two rlimit64 values.
         if unsafe { libc::prlimit64(pid, libc::RLIMIT_NOFILE, &raw const new, &raw mut old) } != 0 {
             return Err(std::io::Error::last_os_error());
@@ -735,10 +756,7 @@ mod sys {
 
     use super::{Group, Leaf, TreeLimits};
 
-    #[allow(
-        dead_code,
-        reason = "never built on this operating system; the shared code still reads its fields"
-    )]
+    #[derive(Debug)]
     pub(super) struct Cgroups {
         pub(super) rel: String,
         pub(super) memory: bool,

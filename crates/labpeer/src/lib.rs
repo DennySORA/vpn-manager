@@ -57,6 +57,17 @@ pub struct LabClient {
     pub address_v6: Ipv6Addr,
 }
 
+/// Shows the public identity; the private key stays out of logs.
+impl std::fmt::Debug for LabClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LabClient")
+            .field("public_key", &self.public_key)
+            .field("address_v4", &self.address_v4)
+            .field("address_v6", &self.address_v6)
+            .finish_non_exhaustive()
+    }
+}
+
 impl LabClient {
     /// A `WireGuard` `.conf` for this client (contains its private key — test material only).
     #[must_use]
@@ -73,6 +84,7 @@ impl LabClient {
     }
 }
 
+#[derive(Debug)]
 pub struct LabPeer {
     pub endpoint: SocketAddr,
     pub public_key: [u8; 32],
@@ -85,6 +97,13 @@ pub struct LabPeer {
 pub struct LabKeys {
     pub server: Zeroizing<[u8; 32]>,
     pub client: Zeroizing<[u8; 32]>,
+}
+
+/// Private keys only: nothing to show.
+impl std::fmt::Debug for LabKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LabKeys").finish_non_exhaustive()
+    }
 }
 
 impl LabKeys {
@@ -178,7 +197,10 @@ impl LabPeer {
         })
         .await?;
         let net = tunnel.netstack();
-        let _ = net.set_gate(GateState::Open);
+        anyhow::ensure!(
+            net.set_gate(GateState::Open) == GateState::Open,
+            "the lab tunnel's gate did not open"
+        );
         net.add_address(IpNetwork::new(IpAddr::V4(INTERNET_V4), 32)?)?;
         spawn_services(&net)?;
         Ok(Self {
@@ -329,6 +351,10 @@ fn spawn_services(net: &Netstack) -> anyhow::Result<()> {
                 let io = hyper_util::rt::TokioIo::new(stream);
                 let svc = hyper::service::service_fn(move |req| http_service(req, peer));
                 // Like common servers, answer a request whose client already half-closed.
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a client that resets or leaves ends only its own connection"
+                )]
                 let _ = hyper::server::conn::http1::Builder::new()
                     .half_close(true)
                     .serve_connection(io, svc)
@@ -340,6 +366,10 @@ fn spawn_services(net: &Netstack) -> anyhow::Result<()> {
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
         while let Ok((n, from)) = udp_echo.recv_from(&mut buf).await {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "an echo that cannot be sent is a lost datagram, as UDP allows"
+            )]
             let _ = udp_echo.send_to(&buf[..n], from).await;
         }
     });
@@ -364,6 +394,10 @@ fn spawn_stream_services(net: &Netstack) -> anyhow::Result<()> {
                             }
                         }
                     }
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "closing a connection the client may already have reset"
+                    )]
                     let _ = s.shutdown().await;
                 });
             }
@@ -429,6 +463,10 @@ pub fn spawn_loopback_forward(net: &Netstack, port: u16, target: SocketAddr) -> 
         while let Ok(mut inside) = listener.accept().await {
             tokio::spawn(async move {
                 if let Ok(mut host) = tokio::net::TcpStream::connect(target).await {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "the relay ends when either side closes or fails; both ends then close"
+                    )]
                     let _ = tokio::io::copy_bidirectional(&mut inside, &mut host).await;
                 }
             });
@@ -444,6 +482,10 @@ fn spawn_dns(net: &Netstack) -> anyhow::Result<()> {
         let mut buf = vec![0u8; 4096];
         while let Ok((n, from)) = dns_udp.recv_from(&mut buf).await {
             if let Some(reply) = dns_answer(&buf[..n]) {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "an answer that cannot be sent is a lost datagram; the client asks again"
+                )]
                 let _ = dns_udp.send_to(&reply, from).await;
             }
         }

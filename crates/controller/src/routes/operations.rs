@@ -12,6 +12,15 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
+/// No operation with that id or Idempotency-Key.
+fn operation_not_found() -> HttpError {
+    HttpError(ApiError::not_found(tr!(
+        "this operation",
+        "這項操作",
+        "この操作"
+    )))
+}
+
 /// `GET /v1/operations?limit=` (default 50, at most 200): the newest operations, newest first.
 pub async fn list(
     State(state): State<AppState>,
@@ -30,7 +39,7 @@ pub async fn get(
 ) -> HttpResult<Json<Operation>> {
     match state.link.call(Call::Operation(id)).await? {
         Reply::Operation(Some(op)) => Ok(Json(op)),
-        Reply::Operation(None) => Err(HttpError(ApiError::not_found("operation"))),
+        Reply::Operation(None) => Err(operation_not_found()),
         _ => Err(wrong()),
     }
 }
@@ -41,7 +50,7 @@ pub async fn by_key(
 ) -> HttpResult<Json<Operation>> {
     match state.link.call(Call::OperationByKey(key)).await? {
         Reply::Operation(Some(op)) => Ok(Json(op)),
-        Reply::Operation(None) => Err(HttpError(ApiError::not_found("operation"))),
+        Reply::Operation(None) => Err(operation_not_found()),
         _ => Err(wrong()),
     }
 }
@@ -70,7 +79,8 @@ pub async fn delete_secret(
     headers: HeaderMap,
     body: Body,
 ) -> HttpResult<StatusCode> {
-    let r: SecretRef = secret.parse().map_err(|_| {
+    let r = secret.parse::<SecretRef>().map_err(|e| {
+        tracing::debug!(error = %e, "secret ref refused");
         bad(
             ErrorCode::InvalidRequest,
             tr!(

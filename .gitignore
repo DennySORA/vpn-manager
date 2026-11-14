@@ -43,5 +43,8 @@
 # Claude Code local state (agent worktrees, settings)
 /.claude/
 
+# Serena local state (project settings, caches, memories)
+/.serena/
+
 # Packaged installers (scripts/package.sh)
 /dist/

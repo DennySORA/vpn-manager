@@ -420,6 +420,15 @@ pub enum ProviderCredentialInput {
     Airvpn { username: String, password: String },
 }
 
+/// Shows only which provider: the account number, user name and password stay out of logs.
+impl std::fmt::Debug for ProviderCredentialInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderCredentialInput")
+            .field("provider", &self.provider())
+            .finish_non_exhaustive()
+    }
+}
+
 impl ProviderCredentialInput {
     #[must_use]
     pub const fn provider(&self) -> ProviderKind {

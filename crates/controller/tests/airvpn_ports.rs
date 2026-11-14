@@ -8,16 +8,14 @@
 //! cookies and the page token never reach a relay line, an exit check, a log line, an answer or
 //! an error. Nothing touches the network, a manager or a real account.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 #[path = "../../providers/tests/support/airvpn_site.rs"]
 mod fake_site;
 
 use std::convert::Infallible;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -103,7 +101,11 @@ struct RelaySocket {
 
 impl RelaySocket {
     fn spawn(server: Arc<rustls::ServerConfig>, site: Arc<FakeSite>) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Private like the manager's run directory: a client refuses a socket others could replace.
+        let dir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let path = dir.path().join("c.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let route = RelayRoute::Instance {
@@ -265,6 +267,10 @@ async fn serve(
             Ok::<_, Infallible>(response)
         }
     });
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the connection ends when the client is done or gives up (a stalled answer); either way this relay connection is over"
+    )]
     let _ = hyper::server::conn::http1::Builder::new()
         .serve_connection(TokioIo::new(tls), service)
         .await;

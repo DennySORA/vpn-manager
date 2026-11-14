@@ -40,13 +40,19 @@ impl AppEndpoint {
     pub async fn connect(&self, within: Duration) -> io::Result<TcpStream> {
         let stream = tokio::time::timeout(within, TcpStream::connect(self.0))
             .await
-            .map_err(|_| {
+            .map_err(|_elapsed| {
                 io::Error::new(io::ErrorKind::TimedOut, "the App did not accept in time")
             })??;
         // Forwarded application streams: latency over coalescing, as in the tunnel.
-        let _ = stream.set_nodelay(true);
+        if let Err(e) = stream.set_nodelay(true) {
+            tracing::debug!(error = %e, "TCP_NODELAY not set on a connection to an App");
+        }
         // Bounded kernel buffers, as for a Gateway's clients.
-        let _ = vpn_platform::nobufs::fix_buffers(&stream, vpn_platform::nobufs::LOOPBACK_BUFFER);
+        if let Err(e) =
+            vpn_platform::nobufs::fix_buffers(&stream, vpn_platform::nobufs::LOOPBACK_BUFFER)
+        {
+            tracing::debug!(error = %e, "buffers of a connection to an App not fixed");
+        }
         Ok(stream)
     }
 

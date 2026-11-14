@@ -3,10 +3,7 @@
 //! it, with the list, the connection and the address named; nothing is written then. Bans are
 //! listed and lifted.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -131,7 +128,7 @@ async fn lab() -> Lab {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();

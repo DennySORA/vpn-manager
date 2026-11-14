@@ -49,11 +49,6 @@ pub enum EntityKind {
     ProviderAccount,
 }
 
-// One entity per control frame, moved straight into (de)serialization.
-#[allow(
-    clippy::large_enum_variant,
-    reason = "a message is built, sent and dropped once; it is never stored in bulk, so boxing a variant saves nothing"
-)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Entity {
     Profile(RuntimeProfile),
@@ -475,7 +470,7 @@ pub enum PerfCall {
 }
 
 // One reply per frame, built, serialized and dropped: boxing would only add allocations.
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "a message is built, sent and dropped once; it is never stored in bulk, so boxing a variant saves nothing"
 )]
@@ -500,7 +495,7 @@ pub enum Event {
 }
 
 // A wire message: built, framed and dropped; boxing `Call` would only add an allocation.
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "a message is built, sent and dropped once; it is never stored in bulk, so boxing a variant saves nothing"
 )]
@@ -547,10 +542,20 @@ struct Calls {
     closed: bool,
 }
 
+/// Shows how many calls wait, not their replies.
+impl std::fmt::Debug for Calls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Calls")
+            .field("waiting", &self.waiting.len())
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
 type Pending = Arc<Mutex<Calls>>;
 
 /// Client used by the controller. Cheap to clone; reconnect by creating a new one.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ControlClient {
     out: mpsc::Sender<ClientMsg>,
     pending: Pending,
@@ -659,6 +664,10 @@ impl ControlClient {
                     if let ServerMsg::Reply { id, result } = msg
                         && let Some(waiter) = p.lock().waiting.remove(&id)
                     {
+                        #[expect(
+                            clippy::let_underscore_must_use,
+                            reason = "it fails only when the caller stopped waiting (timed out, or its request was dropped) and dropped the receiver; the reply then has nowhere to go"
+                        )]
                         let _ = waiter.reply.send(result);
                     }
                 }
@@ -682,11 +691,19 @@ impl ControlClient {
                     } else {
                         unavailable()
                     };
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "it fails only when the caller stopped waiting (timed out, or its request was dropped), which then needs no failure"
+                    )]
                     let _ = waiter.reply.send(Err(lost));
                 }
             }
             // Both halves close here, so the manager sees the whole connection go.
             drop((rx, tx, out_rx));
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "it fails only when every client handle is gone, and then nobody is left to tell that the connection ended"
+            )]
             let _ = lost_tx.send(true);
         });
         Ok(Self {
@@ -716,6 +733,10 @@ impl ControlClient {
     /// needed.
     pub async fn closed(&self) {
         let mut lost = self.lost.clone();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "either way the connection is gone: it reported so, or its task ended and dropped the sender"
+        )]
         let _ = lost.wait_for(|gone| *gone).await;
     }
 

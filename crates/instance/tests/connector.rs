@@ -2,10 +2,7 @@
 //! the route it is meant for), the exact address family, the destination policy and the payload
 //! gate, then a byte relay.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
@@ -66,6 +63,10 @@ async fn origin() -> u16 {
             tokio::spawn(async move {
                 let mut buf = [0u8; 4];
                 if s.read_exact(&mut buf).await.is_ok() {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "a client gone before the pong fails its own check; the origin has nothing to add"
+                    )]
                     let _ = s.write_all(b"pong").await;
                 }
             });

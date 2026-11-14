@@ -24,8 +24,8 @@ mkdir -p dist
 cp target/release/vpn-installer "dist/${name}"
 cp target/release/THIRD-PARTY-NOTICES.txt "dist/${name}.notices.txt"
 if command -v sha256sum >/dev/null; then
-  (cd dist && sha256sum "${name}" > "${name}.sha256")
+  (cd dist && sha256sum "${name}" >"${name}.sha256")
 else
-  (cd dist && shasum -a 256 "${name}" > "${name}.sha256")
+  (cd dist && shasum -a 256 "${name}" >"${name}.sha256")
 fi
 echo "dist/${name}"

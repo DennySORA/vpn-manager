@@ -63,6 +63,31 @@ pub struct TunnelConfig {
     pub transport: TransportPlan,
 }
 
+/// Shows the peer; the preshared key stays out of logs.
+impl std::fmt::Debug for PeerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerConfig")
+            .field("public_key", &self.public_key)
+            .field("preshared_key", &self.preshared_key.is_some())
+            .field("endpoint", &self.endpoint)
+            .field("allowed_ips", &self.allowed_ips)
+            .field("persistent_keepalive", &self.persistent_keepalive)
+            .finish()
+    }
+}
+
+/// Shows the shape of the tunnel; the private key stays out of logs.
+impl std::fmt::Debug for TunnelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TunnelConfig")
+            .field("peer", &self.peer)
+            .field("addresses", &self.addresses)
+            .field("mtu", &self.mtu)
+            .field("listen_port", &self.listen_port)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Observed peer state.
 #[derive(Debug, Clone, Default)]
 pub struct PeerSnapshot {
@@ -92,6 +117,15 @@ pub struct Tunnel {
     device: DeviceHandle,
     channel_stats: Arc<IpChannelStats>,
     underlay_stats: Arc<UnderlayStats>,
+}
+
+/// Shows the netstack; the `GotaTun` device handle has no `Debug`.
+impl std::fmt::Debug for Tunnel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tunnel")
+            .field("netstack", &self.netstack)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Tunnel {
@@ -150,9 +184,7 @@ impl Tunnel {
             }
         };
         let sealed = netstack.clone();
-        let device = DeviceHandle::spawn(device, peer_key, move || {
-            let _ = sealed.set_gate(crate::GateState::Sealed);
-        });
+        let device = DeviceHandle::spawn(device, peer_key, move || sealed.seal());
         Ok(Self {
             netstack,
             device,
@@ -286,7 +318,10 @@ impl DeviceHandle {
                 if self.cmd.send(Cmd::Kick(tx)).await.is_err() {
                     return Err(TunnelError::Stopped);
                 }
-                let _ = rx.await;
+                // The device task answers every kick; no answer means it ended.
+                if rx.await.is_err() {
+                    return Err(TunnelError::Stopped);
+                }
                 next_kick = now + Duration::from_secs(1);
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -303,20 +338,37 @@ impl DeviceHandle {
 
     pub(crate) async fn stop(&self) {
         let (tx, rx) = oneshot::channel();
-        if self.cmd.send(Cmd::Stop(tx)).await.is_ok() {
-            let _ = rx.await;
+        if self.cmd.send(Cmd::Stop(tx)).await.is_ok() && rx.await.is_err() {
+            // Ended on its own meanwhile: stopped either way.
+            tracing::trace!("device task ended before it confirmed the stop");
         }
     }
 
     pub(crate) async fn rebind(&self) -> Result<(), TunnelError> {
         let (tx, rx) = oneshot::channel();
+        // Either error only says that the device task ended.
         self.cmd
             .send(Cmd::Rebind(tx))
             .await
-            .map_err(|_| TunnelError::Stopped)?;
+            .map_err(|_ended| TunnelError::Stopped)?;
         rx.await
-            .map_err(|_| TunnelError::Stopped)?
+            .map_err(|_ended| TunnelError::Stopped)?
             .map_err(TunnelError::Rebind)
+    }
+}
+
+/// Answer a command. Its caller may have stopped waiting (the future was dropped): then the
+/// answer is not needed.
+fn answer<V>(reply: oneshot::Sender<V>, value: V) {
+    if reply.send(value).is_err() {
+        tracing::trace!("tunnel command answered after its caller stopped waiting");
+    }
+}
+
+/// Publish why the device ended. Every handle may be gone already: then nobody is told.
+fn publish_end(fatal: &watch::Sender<Option<String>>, why: &str) {
+    if fatal.send(Some(why.to_owned())).is_err() {
+        tracing::trace!("device end not published: no tunnel handle left");
     }
 }
 
@@ -337,9 +389,7 @@ async fn device_task<T: DeviceTransports>(
                 }
                 // English: this crate has no `vpn_domain::Text`; the worker words the
                 // `TUNNEL_FATAL` fault for people.
-                let _ = fatal.send(Some(
-                    "The WireGuard device hit an unrecoverable error".into(),
-                ));
+                publish_end(&fatal, "The WireGuard device hit an unrecoverable error");
                 device.stop().await;
                 return;
             }
@@ -352,27 +402,31 @@ async fn device_task<T: DeviceTransports>(
                         rx_bytes: p.stats.rx_bytes as u64,
                         tx_bytes: p.stats.tx_bytes as u64,
                     });
-                    let _ = reply.send(snap);
+                    answer(reply, snap);
                 }
                 Some(Cmd::Kick(reply)) => {
                     // force_handshake sends the initiation first and then waits for completion
-                    // forever; cut the wait short so the device task stays responsive. Completion
-                    // is observed through peer statistics.
-                    let _ = tokio::time::timeout(
+                    // forever; cut the wait short so the device task stays responsive (running
+                    // out of time is the expected outcome). Completion is observed through peer
+                    // statistics.
+                    let kicked = tokio::time::timeout(
                         Duration::from_millis(50),
                         device.force_handshake(&peer_key),
                     )
                     .await;
-                    let _ = reply.send(());
+                    if let Ok(Err(e)) = kicked {
+                        tracing::debug!(error = %e, "handshake initiation not sent");
+                    }
+                    answer(reply, ());
                 }
                 Some(Cmd::Rebind(reply)) => {
                     device.suspend().await;
-                    let _ = reply.send(device.resume().await.map_err(|e| e.to_string()));
+                    answer(reply, device.resume().await.map_err(|e| e.to_string()));
                 }
                 Some(Cmd::Stop(reply)) => {
                     device.stop().await;
-                    let _ = fatal.send(Some("tunnel stopped".into()));
-                    let _ = reply.send(());
+                    publish_end(&fatal, "tunnel stopped");
+                    answer(reply, ());
                     return;
                 }
                 None => {

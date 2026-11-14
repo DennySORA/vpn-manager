@@ -85,7 +85,7 @@ const VERSION: &str = "500";
 
 /// `AirVPN` bootstrap client over the caller's connector: IPv4, port 80, one pinned address per
 /// attempt. Cheap to clone when `C` is.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AirVpn<C> {
     connector: C,
     rsa: PublicEncryptingKey,

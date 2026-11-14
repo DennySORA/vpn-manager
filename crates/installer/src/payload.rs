@@ -102,7 +102,8 @@ impl Payload {
     }
 }
 
-/// The identity `vpnd` reports for itself: its version and the start of its SHA-256.
+/// The identity `vpnd` reports for itself: its version and the start of its SHA-256 (the first 16
+/// hex digits; all of a shorter text).
 pub fn build_id(version: &str, vpnd_sha256: &str) -> String {
-    format!("{version}+{}", &vpnd_sha256[..16])
+    format!("{version}+{}", vpnd_sha256.get(..16).unwrap_or(vpnd_sha256))
 }

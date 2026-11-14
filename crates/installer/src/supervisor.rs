@@ -4,7 +4,7 @@
 //! failed exit at most every 10 s, and get time to stop: the web UI 30 s, the manager up to 16
 //! minutes (it stops its managed Apps first, each with its own grace of up to 15 minutes).
 
-#![allow(unsafe_code, reason = "getpwuid and getuid for the current user name")]
+#![expect(unsafe_code, reason = "getpwuid and getuid for the current user name")]
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -84,14 +84,19 @@ pub fn expect_ok(out: &Output, what: &str) -> anyhow::Result<()> {
 
 /// The user this process runs as.
 pub fn user_name() -> anyhow::Result<String> {
-    // SAFETY: getpwuid returns a pointer into static storage or null; it is read at once.
-    unsafe {
-        let pw = libc::getpwuid(libc::getuid());
-        if pw.is_null() || (*pw).pw_name.is_null() {
-            bail!("無法取得目前使用者名稱");
-        }
-        Ok(std::ffi::CStr::from_ptr((*pw).pw_name)
-            .to_string_lossy()
-            .into_owned())
-    }
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    // SAFETY: getpwuid has no preconditions; it returns null or a pointer into static storage
+    // that stays valid until the next getpw* call, and this single-threaded program makes none
+    // before the name is copied out below.
+    let pw = unsafe { libc::getpwuid(uid) };
+    // SAFETY: `pw` is null or points to the valid `passwd` entry getpwuid just filled in.
+    let entry = unsafe { pw.as_ref() };
+    let Some(name) = entry.map(|e| e.pw_name).filter(|n| !n.is_null()) else {
+        bail!("無法取得目前使用者名稱");
+    };
+    // SAFETY: `name` is non-null and points to the entry's NUL-terminated user name, which stays
+    // unchanged while it is copied out here.
+    let name = unsafe { std::ffi::CStr::from_ptr(name) };
+    Ok(name.to_string_lossy().into_owned())
 }

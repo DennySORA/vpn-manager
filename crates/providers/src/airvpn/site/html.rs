@@ -149,81 +149,91 @@ pub(super) fn tags(page: &str) -> Vec<Tag<'_>> {
             i = at + 1;
             continue;
         }
-        let mut j = name_at;
-        while j < b.len() && !b[j].is_ascii_whitespace() && b[j] != b'>' && b[j] != b'/' {
-            j += 1;
-        }
-        let name = &page[name_at..j];
-        let mut attrs = Vec::new();
-        loop {
-            while j < b.len() && b[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            match b.get(j) {
-                None => break,
-                Some(b'>') => {
-                    j += 1;
-                    break;
-                }
-                Some(b'/') => {
-                    j += 1;
-                    continue;
-                }
-                Some(_) => {}
-            }
-            let name_from = j;
-            while j < b.len() && !b[j].is_ascii_whitespace() && !matches!(b[j], b'=' | b'>' | b'/')
-            {
-                j += 1;
-            }
-            let attr = &page[name_from..j];
-            while j < b.len() && b[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            let value = if b.get(j) == Some(&b'=') {
-                j += 1;
-                while j < b.len() && b[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if let Some(&q @ (b'"' | b'\'')) = b.get(j) {
-                    let from = j + 1;
-                    let to = find(b, from, &[q]).unwrap_or(b.len());
-                    j = (to + 1).min(b.len());
-                    Some(&page[from..to])
-                } else {
-                    let from = j;
-                    while j < b.len() && !b[j].is_ascii_whitespace() && b[j] != b'>' {
-                        j += 1;
-                    }
-                    Some(&page[from..j])
-                }
-            } else {
-                None
-            };
-            if attrs.len() < MAX_ATTRIBUTES && !attr.is_empty() {
-                attrs.push((attr, value));
-            }
-        }
-        let raw_text =
-            !end && (name.eq_ignore_ascii_case("script") || name.eq_ignore_ascii_case("style"));
-        out.push(Tag {
-            name,
-            end,
-            attrs,
-            span: at..j,
-        });
-        i = j;
-        if raw_text {
+        let Some(tag) = tag_at(page, at, name_at, end) else {
+            break;
+        };
+        i = tag.span.end;
+        if !end && (tag.is("script") || tag.is("style")) {
             // Their content is text, never markup: resume at their end tag.
-            let close = if name.eq_ignore_ascii_case("script") {
+            let close = if tag.is("script") {
                 b"</script".as_slice()
             } else {
                 b"</style".as_slice()
             };
-            i = find_ci(b, j, close).unwrap_or(b.len());
+            i = find_ci(b, i, close).unwrap_or(b.len());
         }
+        out.push(tag);
     }
     out
+}
+
+/// The tag whose `<` is at `at` and whose name starts at `name_at`, through its `>` (or the end
+/// of the page).
+///
+/// It walks bytes, and every offset it cuts the page at is the end of the page or the position of
+/// an ASCII byte, so a character boundary; `None` were one not.
+fn tag_at(page: &str, at: usize, name_at: usize, end: bool) -> Option<Tag<'_>> {
+    let b = page.as_bytes();
+    let mut j = name_at;
+    while j < b.len() && !b[j].is_ascii_whitespace() && b[j] != b'>' && b[j] != b'/' {
+        j += 1;
+    }
+    let name = page.get(name_at..j)?;
+    let mut attrs = Vec::new();
+    loop {
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        match b.get(j) {
+            None => break,
+            Some(b'>') => {
+                j += 1;
+                break;
+            }
+            Some(b'/') => {
+                j += 1;
+                continue;
+            }
+            Some(_) => {}
+        }
+        let name_from = j;
+        while j < b.len() && !b[j].is_ascii_whitespace() && !matches!(b[j], b'=' | b'>' | b'/') {
+            j += 1;
+        }
+        let attr = page.get(name_from..j)?;
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let value = if b.get(j) == Some(&b'=') {
+            j += 1;
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if let Some(&q @ (b'"' | b'\'')) = b.get(j) {
+                let from = j + 1;
+                let to = find(b, from, &[q]).unwrap_or(b.len());
+                j = (to + 1).min(b.len());
+                Some(page.get(from..to)?)
+            } else {
+                let from = j;
+                while j < b.len() && !b[j].is_ascii_whitespace() && b[j] != b'>' {
+                    j += 1;
+                }
+                Some(page.get(from..j)?)
+            }
+        } else {
+            None
+        };
+        if attrs.len() < MAX_ATTRIBUTES && !attr.is_empty() {
+            attrs.push((attr, value));
+        }
+    }
+    Some(Tag {
+        name,
+        end,
+        attrs,
+        span: at..j,
+    })
 }
 
 /// First `needle` at or after `from`.
@@ -255,38 +265,43 @@ pub(super) fn decode(raw: &str) -> Cow<'_, str> {
 
 fn decode_into(raw: &str, out: &mut String) {
     let mut rest = raw;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        rest = &rest[at..];
-        let reference = rest
-            .get(1..rest.len().min(12))
-            .and_then(|r| r.find(';'))
-            .map(|semi| &rest[1..=semi]);
-        let decoded = reference.and_then(|r| match r {
-            "quot" => Some('"'),
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "apos" => Some('\''),
-            "nbsp" => Some('\u{a0}'),
-            _ => {
-                let number = r.strip_prefix('#')?;
-                let code = match number.strip_prefix(['x', 'X']) {
-                    Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-                    None => number.parse().ok()?,
-                };
-                char::from_u32(code).filter(|c| *c != '\0')
-            }
-        });
-        if let (Some(r), Some(c)) = (reference, decoded) {
+    while let Some((text, tail)) = rest.split_once('&') {
+        out.push_str(text);
+        // A reference ends with `;` within the 11 bytes after `&`: what it stands for, and the
+        // text after it.
+        let decoded = tail
+            .get(..tail.len().min(11))
+            .and_then(|head| head.find(';'))
+            .and_then(|semi| Some((entity(tail.get(..semi)?)?, tail.get(semi + 1..)?)));
+        rest = if let Some((c, after)) = decoded {
             out.push(c);
-            rest = &rest[r.len() + 2..];
+            after
         } else {
             out.push('&');
-            rest = &rest[1..];
-        }
+            tail
+        };
     }
     out.push_str(rest);
+}
+
+/// The character a reference's name (between `&` and `;`) stands for.
+fn entity(name: &str) -> Option<char> {
+    match name {
+        "quot" => Some('"'),
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "apos" => Some('\''),
+        "nbsp" => Some('\u{a0}'),
+        _ => {
+            let number = name.strip_prefix('#')?;
+            let code = match number.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => number.parse().ok()?,
+            };
+            char::from_u32(code).filter(|c| *c != '\0')
+        }
+    }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -386,7 +401,9 @@ pub(super) fn login_form(page: &str) -> Result<LoginForm, FormProblem> {
         if !has(AUTH) && !password_field {
             continue; // another form to /login/ (a social sign-in button)
         }
-        if has_any(&page[opens..closes], CAPTCHA) {
+        // The form's markup: both ends are a tag's `<` or the end of the page, so character
+        // boundaries (were they not, the whole page is searched, which errs towards a CAPTCHA).
+        if has_any(page.get(opens..closes).unwrap_or(page), CAPTCHA) {
             return Err(FormProblem::Captcha);
         }
         problem = match () {
@@ -678,10 +695,9 @@ pub(super) fn message(page: &str) -> Option<String> {
             depth -= 1;
         }
     }
-    let text: String = fragment_text(&page[open.span.end..stop.max(open.span.end)])
-        .chars()
-        .take(MAX_MESSAGE)
-        .collect();
+    // Both ends are a tag's end or `<`, or the end of the page: character boundaries.
+    let inner = page.get(open.span.end..stop.max(open.span.end))?;
+    let text: String = fragment_text(inner).chars().take(MAX_MESSAGE).collect();
     (!text.is_empty()).then_some(text)
 }
 
@@ -690,10 +706,10 @@ pub(super) fn message(page: &str) -> Option<String> {
 pub(super) fn fragment_text(fragment: &str) -> String {
     let mut text = String::with_capacity(fragment.len());
     let mut rest = fragment;
-    while let Some(lt) = rest.find('<') {
-        text.push_str(&rest[..lt]);
+    while let Some((before, tag)) = rest.split_once('<') {
+        text.push_str(before);
         text.push(' ');
-        rest = rest[lt..].find('>').map_or("", |gt| &rest[lt + gt + 1..]);
+        rest = tag.split_once('>').map_or("", |(_, after)| after);
     }
     text.push_str(rest);
     decode(&text)
@@ -760,8 +776,8 @@ pub(super) fn snippet(body: &[u8], secrets: &[&str]) -> String {
             .position(|t| !t.end && t.is("title"))
             .and_then(|at| {
                 let from = tags(&text)[at].span.end;
-                find_ci(text.as_bytes(), from, b"</title")
-                    .map(|to| decode(&text[from..to]).into_owned())
+                let to = find_ci(text.as_bytes(), from, b"</title")?;
+                text.get(from..to).map(|title| decode(title).into_owned())
             })
             .unwrap_or_default();
         format!(
@@ -802,24 +818,41 @@ pub(super) fn snippet(body: &[u8], secrets: &[&str]) -> String {
 
 /// `text` with every `needle` (ignoring case) replaced.
 fn replace_ci(text: &str, needle: &str, with: &str) -> String {
-    let lower = text.to_lowercase();
-    let needle = needle.to_lowercase();
-    if needle.is_empty() || lower.len() != text.len() || !lower.contains(&needle) {
-        // Case folding changed the length (rare scripts): drop the text rather than risk it.
-        return if lower.contains(&needle) {
-            "…".into()
-        } else {
-            text.into()
-        };
+    // Lowercased one character at a time, text and needle alike, so the offsets found in `lower`
+    // are offsets of `text` exactly when no character changes its length; a total length that
+    // stays the same can hide a longer and a shorter one.
+    let needle: String = needle.chars().flat_map(char::to_lowercase).collect();
+    let mut lower = String::with_capacity(text.len());
+    let mut aligned = true;
+    for c in text.chars() {
+        let start = lower.len();
+        lower.extend(c.to_lowercase());
+        aligned &= lower.len() - start == c.len_utf8();
+    }
+    if needle.is_empty() || !lower.contains(&needle) {
+        return text.into();
+    }
+    if !aligned {
+        // Case folding changed a character's length (rare scripts): drop the text rather than
+        // risk masking the wrong bytes.
+        return "…".into();
     }
     let mut out = String::with_capacity(text.len());
     let mut from = 0;
-    while let Some(at) = lower[from..].find(&needle) {
-        out.push_str(&text[from..from + at]);
+    while let Some(at) = lower.get(from..).and_then(|rest| rest.find(&needle)) {
+        // An offset of `lower` that falls inside a character of `text`: case folding changed
+        // lengths that cancel out. Drop the text rather than risk it.
+        let Some(before) = text.get(from..from + at) else {
+            return "…".into();
+        };
+        out.push_str(before);
         out.push_str(with);
         from += at + needle.len();
     }
-    out.push_str(&text[from..]);
+    let Some(rest) = text.get(from..) else {
+        return "…".into();
+    };
+    out.push_str(rest);
     out
 }
 

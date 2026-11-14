@@ -111,7 +111,9 @@ where
             let n = client_rx.read(&mut buf[..max]).await?;
             if n == 0 {
                 // Propagate EOF. A peer that is already gone cannot be shut down; nothing is lost.
-                let _ = upstream_tx.shutdown().await;
+                if let Err(e) = upstream_tx.shutdown().await {
+                    tracing::trace!(error = %e, "EOF not passed on: the peer is gone");
+                }
                 return Ok(());
             }
             send_watching(&mut upstream_tx, &buf[..n], up, &mut client_rx).await?;
@@ -192,7 +194,9 @@ where
         let n = reader.read(&mut buf[..max]).await?;
         if n == 0 {
             // Propagate EOF. A peer that is already gone cannot be shut down; nothing is lost.
-            let _ = writer.shutdown().await;
+            if let Err(e) = writer.shutdown().await {
+                tracing::trace!(error = %e, "EOF not passed on: the peer is gone");
+            }
             return Ok(());
         }
         cap.acquire(n).await;

@@ -2,10 +2,7 @@
 //! connection is for, confirms the request it is about to write right before the first byte, and
 //! reports the answer. A refusal at either point sends nothing.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 mod support;
 
@@ -182,7 +179,7 @@ async fn a_refusal_before_the_first_byte_sends_nothing() {
     assert_matches!(&e, HttpError::Refused(r) if r.code == ErrorCode::ProviderPreflightFailed);
     assert!(!e.maybe_delivered());
     assert!(fixture.seen().is_empty(), "no request reached the server");
-    assert_eq!(log.lock().unwrap().answered, Vec::<http::StatusCode>::new());
+    assert_eq!(log.lock().unwrap().answered, Vec::<StatusCode>::new());
     // As a provider error it keeps its code and message.
     let p = ProviderError::from(e);
     assert_eq!(p.code(), ErrorCode::ProviderPreflightFailed);

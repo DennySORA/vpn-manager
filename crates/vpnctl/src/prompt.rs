@@ -3,7 +3,7 @@
 //! prompt goes to stderr and what is typed is not echoed (the terminal's settings come back
 //! afterwards, also when the read is interrupted); from a pipe the lines are read as they are.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "termios and isatty FFI for reading a secret without echo"
 )]
@@ -35,15 +35,21 @@ static SAVED_SET: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn restore_and_reraise(sig: libc::c_int) {
     if SAVED_SET.load(Ordering::Acquire) {
-        // SAFETY: SAVED was written before SAVED_SET; tcsetattr, signal and raise are
-        // async-signal-safe.
+        // `MaybeUninit` has the layout of the value it holds.
+        let saved = SAVED.0.get().cast::<libc::termios>().cast_const();
+        // SAFETY: `saved` points to the settings written before SAVED_SET was published and
+        // only read since; tcsetattr is async-signal-safe.
         unsafe {
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, (*SAVED.0.get()).as_ptr());
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
         }
     }
-    // SAFETY: the default action for the signal that arrived, then that signal again.
+    // SAFETY: back to the default action for the signal that arrived; signal is
+    // async-signal-safe.
     unsafe {
         libc::signal(sig, libc::SIG_DFL);
+    }
+    // SAFETY: that signal again, now with its default action; raise is async-signal-safe.
+    unsafe {
         libc::raise(sig);
     }
 }
@@ -128,7 +134,7 @@ pub fn secrets(prompts: &[(&str, &str)]) -> Result<Vec<Zeroizing<String>>, Failu
     let mut out = Vec::with_capacity(prompts.len());
     for (prompt, what) in prompts {
         if terminal {
-            eprint!("{prompt}");
+            crate::output::stderr_prompt(prompt);
         }
         match read_line(&mut input) {
             Ok(Some(line)) => out.push(line),

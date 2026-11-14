@@ -971,6 +971,7 @@ class Api:
         self, method: str, path: str, data: bytes | None, headers: dict[str, str], timeout: float
     ) -> tuple[http.client.HTTPResponse, bytes]:
         """Send one request, reconnecting up to API_ATTEMPTS times: (response, raw body)."""
+        result: tuple[http.client.HTTPResponse, bytes] | None = None
         with self.lock:
             for attempt in range(API_ATTEMPTS):
                 try:
@@ -980,7 +981,7 @@ class Api:
                         )
                     self.conn.request(method, path, body=data, headers=headers)
                     r = self.conn.getresponse()
-                    raw = r.read()
+                    result = (r, r.read())
                     if (r.getheader("Connection") or "").lower() == "close":
                         self.conn.close()
                         self.conn = None
@@ -992,7 +993,10 @@ class Api:
                     if attempt == API_ATTEMPTS - 1:
                         raise
                     time.sleep(0.2)
-        return r, raw
+        if result is None:
+            msg = "API_ATTEMPTS must be at least 1"
+            raise RuntimeError(msg)
+        return result
 
     def request(
         self,

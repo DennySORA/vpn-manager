@@ -508,12 +508,16 @@ fn forward_target(uri: &Uri) -> Result<ForwardTarget, Refusal> {
     let host_header = authority
         .port()
         .map_or_else(|| host.to_owned(), |port| format!("{host}:{port}"));
-    let host_header = HeaderValue::from_str(&host_header).map_err(|_| bad_target())?;
+    // `InvalidHeaderValue` says no more than the refusal does: the value does not parse.
+    let host_header = HeaderValue::from_str(&host_header).map_err(|_not_a_value| bad_target())?;
     let path_and_query = uri.query().map_or_else(
         || uri.path().to_owned(),
         |query| format!("{}?{query}", uri.path()),
     );
-    let path_and_query = PathAndQuery::try_from(path_and_query).map_err(|_| bad_target())?;
+    let path_and_query = PathAndQuery::try_from(path_and_query).map_err(|e| {
+        tracing::debug!(error = %e, "request target refused: path or query unusable");
+        bad_target()
+    })?;
     Ok(ForwardTarget {
         host: Host::parse(host),
         origin: Origin {

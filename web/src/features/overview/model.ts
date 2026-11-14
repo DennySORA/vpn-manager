@@ -1,30 +1,7 @@
-import type { InstanceView, LiveRates } from "@/api/types";
+import type { LiveRates } from "@/api/types";
 import { latest } from "@/components/charts/rate-chart";
 import { formatBps } from "@/lib/format";
 import { m } from "./messages";
-
-export interface Onboarding {
-  /** Done or not: get a profile, create a connection, create a proxy port, start and pass verification. */
-  steps: [boolean, boolean, boolean, boolean];
-  /** The first step not done (-1: all done). */
-  next: number;
-  show: boolean;
-}
-
-/**
- * Setup guidance, not a status panel: it ends once a connection with a proxy port has been started
- * (now, or earlier: its last tunnel facts are kept); from then on problems belong to "需要處理".
- * Until then the last step stays, so it can be the next one. With no status known it says nothing
- * about that step.
- */
-export function onboarding(profiles: number, views: InstanceView[], gateways: number): Onboarding {
-  const statuses = views.flatMap((v) => (v.status ? [v.status] : []));
-  const ready = statuses.some((s) => s.phase === "ready");
-  const started = statuses.some((s) => s.intent.desired === "running" || s.tunnel !== null);
-  const steps: Onboarding["steps"] = [profiles > 0, views.length > 0, gateways > 0, ready];
-  const setUp = steps[0] && steps[1] && steps[2];
-  return { steps, next: steps.indexOf(false), show: !(setUp && (ready || started || !statuses.length)) };
-}
 
 /** The latest second of the connections that report one: their payload, and the App sandboxes' part of it. */
 export interface LiveTotal {

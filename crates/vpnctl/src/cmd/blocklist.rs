@@ -2,8 +2,6 @@
 //! replaced through a preview in the web UI (`/security/blocklists`); here a list can be read,
 //! downloaded again (URL sources, through the Provider egress connection) and deleted.
 
-use std::fmt::Write as _;
-
 use clap::Subcommand;
 use hyper::Method;
 use vpn_domain::{BlocklistSource, BlocklistStats, BlocklistView};
@@ -313,20 +311,19 @@ async fn delete(ctx: &Ctx, q: &str, yes: bool) -> CmdResult {
     let v = find(ctx, q).await?;
     let b = &v.blocklist;
     if !yes {
-        let mut why = format!(
+        let mut why = vec![format!(
             "會永久刪除 IP 封鎖清單「{}」（{}）。",
             b.name,
             size(&b.stats)
-        );
+        )];
         if !v.used_by.is_empty() {
-            let _ = write!(
-                why,
-                "\n它仍被安全設定{}使用：先在安全設定中取消選取，否則刪除會被拒絕。",
+            why.push(format!(
+                "它仍被安全設定{}使用：先在安全設定中取消選取，否則刪除會被拒絕。",
                 users(&v)
-            );
+            ));
         }
-        why.push_str("\n確定要刪除，請加上 --yes");
-        return Err(Failure::Usage(why));
+        why.push("確定要刪除，請加上 --yes".into());
+        return Err(Failure::Usage(why.join("\n")));
     }
     let done: Mutation<serde_json::Value> = ctx
         .client

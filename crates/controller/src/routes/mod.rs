@@ -40,7 +40,7 @@ use crate::http::{HttpError, HttpResult, bad, fingerprint, idempotency_key};
 use crate::hub::Hub;
 use crate::link::ManagerLink;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AppState {
     pub link: Arc<ManagerLink>,
     pub hub: Arc<Hub>,
@@ -395,6 +395,7 @@ pub fn new_meta() -> EntityMeta {
 }
 
 /// Outcome of an idempotent mutation.
+#[derive(Debug)]
 pub enum Idem<T> {
     /// Ran now.
     Fresh { operation: Operation, value: T },
@@ -530,14 +531,17 @@ pub async fn finish(
         }
         Err(e) => (OperationStatus::Failed, Some(e.clone()), Vec::new()),
     };
-    let _ = link
+    if let Err(e) = link
         .call(Call::FinishOperation {
             id: operation.id,
             status,
             error: error.clone(),
             result_refs: refs.clone(),
         })
-        .await;
+        .await
+    {
+        tracing::warn!(operation = %operation.id, error = %e, "operation outcome not recorded");
+    }
     operation.status = status;
     operation.error = error;
     operation.result_refs = refs;

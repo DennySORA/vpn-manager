@@ -19,7 +19,7 @@ use serde::Deserialize;
 use vpn_domain::tr;
 use vpn_domain::validation::{is_private, is_special};
 
-use crate::error::{ProviderError, status_error, unexpected_status};
+use crate::error::{ProviderError, from_json, status_error, unexpected_status};
 use crate::https::{Connect, Family, HttpsClient, Request};
 
 pub const STATUS_HOST: &str = "airvpn.org";
@@ -141,7 +141,7 @@ fn public(ip: IpAddr) -> bool {
 /// Strict on what identifies a server and on public, well-formed addresses; tolerant of fields
 /// it does not use. An entry that is not a public address of its family is left out.
 fn parse(body: &[u8]) -> Result<StatusList, ProviderError> {
-    let raw: Raw = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: Raw = from_json(body, drift)?;
     if raw.result != "ok" || raw.servers.is_empty() || raw.servers.len() > MAX_SERVERS {
         return Err(drift());
     }

@@ -12,7 +12,7 @@
 //! makes is in the sandbox's, and the two only meet as byte streams in this process. It holds no
 //! capability, relays at most [`MAX_RELAYS`] connections at once, and ends with the App: it is
 //! killed the moment the launcher exits, which is when the App's tree is gone.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the access-port forwarder fork and its fd and prctl setup via libc"
 )]
@@ -88,6 +88,7 @@ async fn receive(fd: &AsyncFd<OwnedFd>) -> Option<wire::Received> {
 
 /// The manager's end of a running App launcher's control socket: connections for the App go
 /// out on it, and the launcher tells how each went.
+#[derive(Debug)]
 pub struct AccessChannel {
     fd: AsyncFd<OwnedFd>,
 }
@@ -159,27 +160,29 @@ pub fn start_relay(control: OwnedFd, ports: Vec<u16>, last_cap: u32) -> io::Resu
 /// The relay process: dies with the launcher, keeps only the control socket and stdio, holds no
 /// capability, and serves until the manager's end closes and every relayed connection ended.
 fn relay_process(control: OwnedFd, ports: Vec<u16>, last_cap: u32) -> i32 {
-    // SAFETY: prctl and getppid with constant arguments.
-    unsafe {
-        if libc::prctl(
+    // SAFETY: prctl with constant arguments.
+    let armed = unsafe {
+        libc::prctl(
             libc::PR_SET_PDEATHSIG,
             libc::SIGKILL as libc::c_ulong,
             0,
             0,
             0,
-        ) < 0
-        {
-            return 1;
-        }
-        // The launcher is outside the sandbox's pid namespace, where this process is: seen from
-        // here its pid is 0 while it lives. Anything else is the sandbox's init, which took this
-        // process over because the launcher ended before the death signal was armed.
-        if libc::getppid() != 0 {
-            return 0;
-        }
-        // How it shows in the App's process list.
-        libc::prctl(libc::PR_SET_NAME, c"access-relay".as_ptr(), 0, 0, 0);
+        )
+    };
+    if armed < 0 {
+        return 1;
     }
+    // The launcher is outside the sandbox's pid namespace, where this process is: seen from here
+    // its pid is 0 while it lives. Anything else is the sandbox's init, which took this process
+    // over because the launcher ended before the death signal was armed.
+    // SAFETY: getppid has no preconditions.
+    if unsafe { libc::getppid() } != 0 {
+        return 0;
+    }
+    // How it shows in the App's process list.
+    // SAFETY: prctl with a constant, NUL-terminated name.
+    unsafe { libc::prctl(libc::PR_SET_NAME, c"access-relay".as_ptr(), 0, 0, 0) };
     // Nothing of the launcher's but stdio (its log) and the control socket: no report socket, no
     // signal or process descriptor. Its stack is never unwound here (the process `_exit`s), so
     // nothing closes them twice.
@@ -213,7 +216,10 @@ fn relay_process(control: OwnedFd, ports: Vec<u16>, last_cap: u32) -> i32 {
 }
 
 fn report(ctl: &AsyncFd<OwnedFd>, r: &AccessReport) {
-    // Best effort: a manager that does not read only misses the news.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best effort: a manager that does not read only misses the news"
+    )]
     let _ = wire::send_json(ctl.get_ref().as_raw_fd(), r, &[]);
 }
 
@@ -333,10 +339,20 @@ async fn serve(conn: OwnedFd, port: u16, ctl: &AsyncFd<OwnedFd>) {
         Ok(mut app) => {
             report(ctl, &AccessReport::Relayed { port });
             // Interactive traffic (a web UI, an API): latency over coalescing.
-            let _ = client.set_nodelay(true);
-            let _ = app.set_nodelay(true);
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "only a latency gain: a socket without it relays the same bytes"
+            )]
+            {
+                let _ = client.set_nodelay(true);
+                let _ = app.set_nodelay(true);
+            }
             // EOF one way shuts down the write side the other way; the other direction goes
             // on until it ends too. An error either way ends both.
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "however the relaying ended, both connections close right after"
+            )]
             let _ = tokio::io::copy_bidirectional(&mut client, &mut app).await;
         }
         Err(e) => report(

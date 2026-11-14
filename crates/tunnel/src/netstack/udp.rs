@@ -108,6 +108,7 @@ pub(super) fn bind_at(
 }
 
 /// A UDP socket bound to a tunnel port. Dropping it frees the port.
+#[derive(Debug)]
 pub struct UdpSocket {
     shared: Arc<Shared>,
     handle: SocketHandle,
@@ -161,7 +162,7 @@ impl UdpSocket {
                     "the tunnel carries no address of this IP family",
                 )));
             }
-            let socket = stack.sockets.get_mut::<sudp::Socket>(self.handle);
+            let socket = stack.sockets.get_mut::<sudp::Socket<'_>>(self.handle);
             if !socket.is_open() {
                 return Poll::Ready(Err(Self::closed_error()));
             }
@@ -195,7 +196,7 @@ impl UdpSocket {
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         poll_fn(|cx| {
             let mut guard = self.shared.stack.lock();
-            let socket = guard.sockets.get_mut::<sudp::Socket>(self.handle);
+            let socket = guard.sockets.get_mut::<sudp::Socket<'_>>(self.handle);
             if !socket.is_open() {
                 return Poll::Ready(Err(Self::closed_error()));
             }

@@ -77,6 +77,7 @@ fn fetch_failed(why: impl Into<Text>) -> ApiError {
 }
 
 /// A downloaded URL source, parsed.
+#[derive(Debug)]
 pub struct Downloaded {
     pub parsed: ParsedBlocklist,
     pub fetch: BlocklistFetch,
@@ -455,6 +456,14 @@ async fn record(
     }
 }
 
+/// Record a refresh that failed with `e`, best effort: the caller returns `e` either way. When
+/// the record fails too, the list keeps showing its previous refresh, and that is logged.
+async fn record_failure(link: &ManagerLink, id: BlocklistId, e: &ApiError) {
+    if let Err(not_recorded) = record(link, id, false, e.message.clone()).await {
+        tracing::warn!(blocklist = %id, error = %not_recorded, "failed blocklist refresh not recorded");
+    }
+}
+
 /// `POST /v1/blocklists`: the server parses (or downloads) the content again and stores it only
 /// if it is what the preview showed.
 ///
@@ -668,7 +677,7 @@ pub async fn refresh(link: &ManagerLink, id: BlocklistId) -> Result<BlocklistVie
         Ok(p) => p,
         Err(e) => {
             if e.code != ErrorCode::ProviderEgressBlocked {
-                let _ = record(link, id, false, e.message.clone()).await;
+                record_failure(link, id, &e).await;
             }
             return Err(e);
         }
@@ -694,7 +703,7 @@ pub async fn refresh(link: &ManagerLink, id: BlocklistId) -> Result<BlocklistVie
         Ok(_) => record(link, id, true, content_message(entries, first)).await,
         Err(e) => {
             // e.g. the new content covers an address a connection needs: refused, stale.
-            let _ = record(link, id, false, e.message.clone()).await;
+            record_failure(link, id, &e).await;
             Err(e)
         }
     }

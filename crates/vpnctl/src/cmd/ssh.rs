@@ -16,6 +16,7 @@ use vpn_domain::{SshActionResult, SshFileState, SshHost, SshIncludeState, SshSta
 
 use super::{CmdResult, Ctx, Exit, Failure};
 use crate::client::Mutation;
+use crate::output::stderr_line;
 
 #[derive(Subcommand, Debug)]
 pub enum SshCmd {
@@ -142,13 +143,15 @@ pub async fn run(ctx: &Ctx, cmd: SshCmd) -> CmdResult {
 /// `vpnctl ssh-proxy`: relay one SSH connection through a Gateway of this installation.
 pub async fn proxy(gateway: SocketAddr, key_file: PathBuf, host: String, port: u16) -> ExitCode {
     if !gateway.ip().is_loopback() {
-        eprintln!("vpn-manager: 代理埠必須在 127.0.0.1（收到 {gateway}）");
+        stderr_line(&format!(
+            "vpn-manager: 代理埠必須在 127.0.0.1（收到 {gateway}）"
+        ));
         return ExitCode::FAILURE;
     }
     let key = match vpn_ssh::socks::read_key_file(&key_file) {
         Ok(k) => k,
         Err(e) => {
-            eprintln!("vpn-manager: {}", e.zh_tw);
+            stderr_line(&format!("vpn-manager: {}", e.zh_tw));
             return ExitCode::FAILURE;
         }
     };
@@ -156,10 +159,10 @@ pub async fn proxy(gateway: SocketAddr, key_file: PathBuf, host: String, port: u
     let remote = match vpn_ssh::socks::connect(gateway, &host, port, Some(&*key), carries).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
+            stderr_line(&format!(
                 "vpn-manager: 無法經 VPN 連到 {host}:{port}：{}",
                 e.text().zh_tw
-            );
+            ));
             return ExitCode::FAILURE;
         }
     };
@@ -170,7 +173,7 @@ pub async fn proxy(gateway: SocketAddr, key_file: PathBuf, host: String, port: u
     match tokio::io::copy_bidirectional(&mut local, &mut remote).await {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("vpn-manager: 連線中斷：{e}");
+            stderr_line(&format!("vpn-manager: 連線中斷：{e}"));
             ExitCode::FAILURE
         }
     }

@@ -362,9 +362,10 @@ mod ban_source {
             Some((addr, prefix)) => (addr, Some(prefix)),
             None => (&*text, None),
         };
+        // An `AddrParseError` says only "not an IP address", which the message covers.
         let ip: IpAddr = addr
             .parse()
-            .map_err(|_| D::Error::custom("not a ban source"))?;
+            .map_err(|_not_an_ip| D::Error::custom("not a ban source"))?;
         match prefix {
             Some(p) if !(ip.is_ipv6() && p == BAN_V6_PREFIX.to_string()) => {
                 Err(D::Error::custom("not a ban source"))

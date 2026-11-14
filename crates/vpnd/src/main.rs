@@ -8,10 +8,11 @@
 
 // A `pub` item of a program that nothing uses is dead code all the same (off by default).
 #![deny(dead_code_pub_in_binary)]
-#![allow(unsafe_code, reason = "the umask call at process start-up")]
+#![expect(unsafe_code, reason = "the umask call at process start-up")]
 
 mod logfile;
 mod manager;
+mod output;
 mod sandbox_exec;
 
 use std::path::PathBuf;
@@ -95,6 +96,10 @@ enum Role {
 
 pub(crate) async fn shutdown_signal() {
     use tokio::signal::unix::{SignalKind, signal};
+    #[expect(
+        clippy::expect_used,
+        reason = "cannot fail: SIGTERM is a catchable signal, and this runs inside the runtime `main` builds with `enable_all` (its signal driver)"
+    )]
     let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
@@ -137,6 +142,7 @@ fn instance_worker_threads() -> usize {
 fn main() -> anyhow::Result<()> {
     // A managed App's launcher into a strict sandbox (started by the manager, control socket on
     // fd 3): before anything else — no option parsing, no logging, no thread.
+    // nosemgrep: rust.lang.security.args-os.args-os -- picks the role this process runs as; invoked by hand it gains nothing (it needs the manager's control socket on fd 3)
     if std::env::args_os().nth(1).as_deref()
         == Some(std::ffi::OsStr::new(vpn_platform::sandbox::APP_ROLE))
     {
@@ -153,12 +159,12 @@ fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("open log file {}: {e}", path.display()))?;
     }
     if matches!(cli.role, Role::BuildInfo) {
-        println!(
+        output::stdout_line(format_args!(
             "{{\"version\":\"{}\",\"release\":{},\"web_assets\":{}}}",
             vpn_ipc::identity::VERSION,
             !cfg!(debug_assertions),
             vpn_web_provide::has_assets(),
-        );
+        ));
         return Ok(());
     }
     init_tracing();

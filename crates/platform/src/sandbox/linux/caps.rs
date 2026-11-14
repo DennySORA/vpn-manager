@@ -2,7 +2,7 @@
 //! namespace is root there with every capability; neither an App nor the worker needs any. The
 //! functions here only make system calls (no allocation, no locks), so they are safe between
 //! `fork` and `exec` of a multi-threaded parent.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns capability dropping via capset and prctl"
 )]
@@ -66,55 +66,61 @@ pub fn drop_all(last_cap: u32) -> io::Result<()> {
         }
         return Ok(());
     }
-    // SAFETY: prctl and capset with constant arguments and pointers to live locals.
-    unsafe {
-        for cap in 0..=last_cap {
-            if libc::prctl(libc::PR_CAPBSET_DROP, libc::c_ulong::from(cap), 0, 0, 0) < 0 {
-                let e = io::Error::last_os_error();
-                // Unknown to this kernel: nothing to drop.
-                if e.raw_os_error() != Some(libc::EINVAL) {
-                    return Err(e);
-                }
+    for cap in 0..=last_cap {
+        // SAFETY: prctl with plain integer arguments.
+        if unsafe { libc::prctl(libc::PR_CAPBSET_DROP, libc::c_ulong::from(cap), 0, 0, 0) } < 0 {
+            let e = io::Error::last_os_error();
+            // Unknown to this kernel: nothing to drop.
+            if e.raw_os_error() != Some(libc::EINVAL) {
+                return Err(e);
             }
         }
-        // Old kernels without ambient capabilities answer EINVAL: nothing to clear.
+    }
+    // Old kernels without ambient capabilities answer EINVAL: nothing to clear.
+    // SAFETY: prctl with constant arguments.
+    unsafe {
         libc::prctl(
             libc::PR_CAP_AMBIENT,
             libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
             0,
             0,
             0,
-        );
-        let bits = libc::SECBIT_KEEP_CAPS_LOCKED
-            | libc::SECBIT_NO_SETUID_FIXUP
-            | libc::SECBIT_NO_SETUID_FIXUP_LOCKED
-            | libc::SECBIT_NOROOT
-            | libc::SECBIT_NOROOT_LOCKED;
-        if libc::prctl(
+        )
+    };
+    let bits = libc::SECBIT_KEEP_CAPS_LOCKED
+        | libc::SECBIT_NO_SETUID_FIXUP
+        | libc::SECBIT_NO_SETUID_FIXUP_LOCKED
+        | libc::SECBIT_NOROOT
+        | libc::SECBIT_NOROOT_LOCKED;
+    // SAFETY: prctl with constant arguments.
+    if unsafe {
+        libc::prctl(
             libc::PR_SET_SECUREBITS,
             libc::c_ulong::from(bits.cast_unsigned()),
             0,
             0,
             0,
-        ) < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        let header = CapHeader {
-            version: CAP_VERSION_3,
-            pid: 0,
-        };
-        let data = [CapData {
-            effective: 0,
-            permitted: 0,
-            inheritable: 0,
-        }; 2];
-        if libc::syscall(libc::SYS_capset, &raw const header, data.as_ptr()) < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let header = CapHeader {
+        version: CAP_VERSION_3,
+        pid: 0,
+    };
+    let data = [CapData {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    }; 2];
+    // SAFETY: capset with a live header and a two-element array, as version 3 requires.
+    if unsafe { libc::syscall(libc::SYS_capset, &raw const header, data.as_ptr()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: prctl with constant arguments.
+    if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } < 0 {
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }

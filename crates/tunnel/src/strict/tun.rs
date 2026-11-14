@@ -7,7 +7,7 @@
 //! - [`TunSend`] (`GotaTun` writes): decrypted packets from the peer are filtered before they are
 //!   written into the TUN device.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "the TUN device: libc ioctl, read and write on its descriptor and its AsyncFd registration"
 )]
@@ -78,13 +78,16 @@ impl Tun {
                 format!("the TUN descriptor belongs to {name:?}, not {expected:?}"),
             ));
         }
-        // SAFETY: fcntl on a descriptor we own.
-        unsafe {
-            let flags = libc::fcntl(fd.as_raw_fd(), libc::F_GETFL);
-            if flags < 0 || libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0
-            {
-                return Err(io::Error::last_os_error());
-            }
+        // SAFETY: F_GETFL on a descriptor we own; it takes no pointer.
+        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: F_SETFL on a descriptor we own, with its own flags plus `O_NONBLOCK`; it takes
+        // no pointer.
+        let set = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        if set < 0 {
+            return Err(io::Error::last_os_error());
         }
         // SAFETY: an `OwnedFd` stays open and refers to the same file description until the
         // `AsyncFd` (its only owner) is dropped.
@@ -131,7 +134,10 @@ impl Injector {
 
     pub(crate) fn push(&self, packet: &[u8]) {
         let packet = Packet::from_bytes(bytes::BytesMut::from(packet));
-        let _ = self.queue.push(packet);
+        if self.queue.push(packet).is_err() {
+            // Full: the packet is dropped, like on a full link (see `INJECT_QUEUE`).
+            tracing::trace!("injected packet dropped: queue full");
+        }
         self.wake.notify_one();
     }
 
@@ -201,7 +207,11 @@ impl IpRecv for TunRecv {
                         }
                     }
                     Outbound::Refuse(answer) => {
-                        let _ = self.tun.write(&answer);
+                        // Best effort: an answer the device cannot take is lost like any packet
+                        // on a full link; a device that is gone fails the next read.
+                        if let Err(e) = self.tun.write(&answer) {
+                            tracing::trace!(error = %e, "refusal not written to the TUN device");
+                        }
                     }
                     Outbound::Drop => {}
                 }

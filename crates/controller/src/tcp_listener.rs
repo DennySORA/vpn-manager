@@ -50,6 +50,7 @@ const CONCURRENT_LOOKUPS: usize = 4;
 const APPROVED_QUEUE: usize = 64;
 
 /// Accepts on its listeners, judges each client, and hands over only the admitted ones.
+#[derive(Debug)]
 pub struct SameUserTcpListener {
     approved: mpsc::Receiver<(TcpStream, SocketAddr)>,
     local: SocketAddr,
@@ -167,7 +168,9 @@ async fn accept_loop(
             match admission::judge(policy, host, local, peer).await {
                 // The server may be gone meanwhile; the stream then just closes.
                 Ok(_) => {
-                    let _ = tx.send((stream, peer)).await;
+                    if tx.send((stream, peer)).await.is_err() {
+                        tracing::debug!(%peer, "admitted client closed: the server stopped");
+                    }
                 }
                 Err(refusal) => {
                     log.refused(peer, &at, &refusal);

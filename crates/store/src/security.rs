@@ -351,7 +351,7 @@ impl RefreshRow {
         Ok((
             self.id
                 .parse()
-                .map_err(|_| StoreError::Corrupt("blocklist id".into()))?,
+                .map_err(|e| StoreError::Corrupt(format!("blocklist id: {e}")))?,
             BlocklistRefreshState {
                 attempted_at: parse_ts(self.attempted_at)?,
                 ok: self.ok,
@@ -397,18 +397,19 @@ fn ban_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BanRow> {
 
 fn ban_of(row: BanRow) -> Result<Ban, StoreError> {
     let (id, instance, source, reason, sp, spr, policy, generation, created, expires) = row;
-    let corrupt = |what: &str| StoreError::Corrupt(format!("ban {what}"));
+    let corrupt =
+        |what: &str, e: &dyn std::fmt::Display| StoreError::Corrupt(format!("ban {what}: {e}"));
     Ok(Ban {
-        id: id.parse().map_err(|_| corrupt("id"))?,
-        instance_id: instance.parse().map_err(|_| corrupt("instance"))?,
+        id: id.parse().map_err(|e| corrupt("id", &e))?,
+        instance_id: instance.parse().map_err(|e| corrupt("instance", &e))?,
         // Older records may hold a whole IPv6 address; a ban covers its /64.
         source: source
             .parse()
             .map(vpn_domain::validation::ban_scope)
-            .map_err(|_| corrupt("source"))?,
+            .map_err(|e| corrupt("source", &e))?,
         reason: crate::text_column::from_column(reason),
         security_profile_id: sp
-            .map(|s| s.parse().map_err(|_| corrupt("security profile")))
+            .map(|s| s.parse().map_err(|e| corrupt("security profile", &e)))
             .transpose()?,
         security_profile_revision: spr.map(i64::cast_unsigned),
         policy_revision: policy.cast_unsigned(),
@@ -541,8 +542,8 @@ impl Store {
                             info: b.into(),
                             blocklist_id: id
                                 .map(|i| {
-                                    i.parse().map_err(|_| {
-                                        StoreError::Corrupt("built-in blocklist id".into())
+                                    i.parse().map_err(|e| {
+                                        StoreError::Corrupt(format!("built-in blocklist id: {e}"))
                                     })
                                 })
                                 .transpose()?,
@@ -786,7 +787,7 @@ impl Store {
                     let (list, id, name) = row?;
                     let list: BlocklistId = list
                         .parse()
-                        .map_err(|_| StoreError::Corrupt("blocklist reference".into()))?;
+                        .map_err(|e| StoreError::Corrupt(format!("blocklist reference: {e}")))?;
                     out.entry(list).or_default().push(NamedRef { id, name });
                 }
                 Ok(out)
@@ -816,7 +817,7 @@ impl Store {
                     |r| r.get(0),
                 )?;
                 v.parse()
-                    .map_err(|_| StoreError::Corrupt("policy revision".into()))
+                    .map_err(|e| StoreError::Corrupt(format!("policy revision: {e}")))
             })
             .await
     }

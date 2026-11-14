@@ -6,9 +6,8 @@
 //! is given to launchd: a path whose directory is gone keeps a job from starting, so the programs
 //! write their own logs (`--log-file`).
 
-#![allow(unsafe_code, reason = "getuid for the gui/<uid> launchd domain")]
+#![expect(unsafe_code, reason = "getuid for the gui/<uid> launchd domain")]
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -181,7 +180,9 @@ impl Supervisor for Launchd {
 
 fn plist(job: &Job, argv: &[String], working_dir: &str) -> String {
     let arg_lines = argv.iter().fold(String::new(), |mut out, a| {
-        let _ = writeln!(out, "\t\t<string>{}</string>", xml(a));
+        out.push_str("\t\t<string>");
+        out.push_str(&xml(a));
+        out.push_str("</string>\n");
         out
     });
     let process_type = match job.component {

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
-use crate::handover::{HELD, Handover};
+use crate::handover::{Handover, held};
 
 /// `parking_lot::RwLock` under the workspace's hand-over schedule (see the crate documentation).
 ///
@@ -55,6 +55,7 @@ impl<T: fmt::Debug> fmt::Debug for RwLock<T> {
 
 /// Shared access; dropping it unlocks.
 #[must_use = "the lock is released as soon as the guard is dropped"]
+#[derive(Debug)]
 pub struct RwLockReadGuard<'a, T> {
     /// `None` only once `drop` has taken it.
     held: Option<parking_lot::RwLockReadGuard<'a, T>>,
@@ -65,7 +66,7 @@ impl<T> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        self.held.as_deref().expect(HELD)
+        held(self.held.as_deref())
     }
 }
 
@@ -78,6 +79,7 @@ impl<T> Drop for RwLockReadGuard<'_, T> {
 
 /// Exclusive access; dropping it unlocks.
 #[must_use = "the lock is released as soon as the guard is dropped"]
+#[derive(Debug)]
 pub struct RwLockWriteGuard<'a, T> {
     /// `None` only once `drop` has taken it.
     held: Option<parking_lot::RwLockWriteGuard<'a, T>>,
@@ -88,13 +90,13 @@ impl<T> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        self.held.as_deref().expect(HELD)
+        held(self.held.as_deref())
     }
 }
 
 impl<T> DerefMut for RwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.held.as_deref_mut().expect(HELD)
+        held(self.held.as_deref_mut())
     }
 }
 

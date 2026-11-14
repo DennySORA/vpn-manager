@@ -2,10 +2,7 @@
 //! `TunnelConnector` (no tunnel, no host resolver, no real DNS server). Fixture answers are built
 //! with hickory-proto; TLS fixtures use a throwaway CA made with rcgen.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -150,9 +147,17 @@ fn serve_udp(socket: UdpSocket, mode: UdpMode, delay: Duration) -> Log {
                         other_id,
                         foreign,
                     ] {
+                        #[expect(
+                            clippy::let_underscore_must_use,
+                            reason = "junk lost on the way is junk the resolver need not discard"
+                        )]
                         let _ = socket.send_to(&junk, peer).await;
                     }
                 }
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "an answer not sent is a lost datagram: the resolver under test retries or fails"
+                )]
                 let _ = socket.send_to(&answer, peer).await;
             });
         }
@@ -171,6 +176,10 @@ fn serve_udp_while(socket: UdpSocket, on: Arc<AtomicBool>) -> Log {
             if on.load(Ordering::SeqCst)
                 && let Some(answer) = reply(&buf[..len], false)
             {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "an answer not sent is a lost datagram: the resolver under test retries or fails"
+                )]
                 let _ = socket.send_to(&answer, peer).await;
             }
         }
@@ -338,15 +347,19 @@ async fn doh_fixture(config: Arc<rustls::ServerConfig>, redirect: bool) -> (TlsF
                     doh_handle(req, seen.clone(), seen_http.clone(), redirect)
                 });
                 let io = TokioIo::new(tls);
-                if h2 {
-                    let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "the connection ends however the resolver under test ends it (idle close, broken); the fixture has nothing to report"
+                )]
+                let _ = if h2 {
+                    hyper::server::conn::http2::Builder::new(TokioExecutor::new())
                         .serve_connection(io, service)
-                        .await;
+                        .await
                 } else {
-                    let _ = hyper::server::conn::http1::Builder::new()
+                    hyper::server::conn::http1::Builder::new()
                         .serve_connection(io, service)
-                        .await;
-                }
+                        .await
+                };
             });
         }
     });

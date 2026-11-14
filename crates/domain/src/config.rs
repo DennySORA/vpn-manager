@@ -269,7 +269,7 @@ pub struct PortRange {
 
 impl PortRange {
     #[must_use]
-    pub const fn contains(&self, port: u16) -> bool {
+    pub const fn contains(self, port: u16) -> bool {
         self.start <= port && port <= self.end
     }
 }

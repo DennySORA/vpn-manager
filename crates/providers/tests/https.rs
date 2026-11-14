@@ -2,10 +2,7 @@
 //! SNI/ALPN, the caller's connector and family, redirects, body limits, the deadline, and
 //! redacted `Debug`.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 mod support;
 

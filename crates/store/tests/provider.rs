@@ -1,11 +1,9 @@
 //! The Provider egress binding: compare-and-set changes that always advance the route fence, a
 //! bootstrap latch that never resets, and an egress Instance that cannot be deleted.
 
-// Test fixtures: a failed setup step should panic right there.
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+// Test code throughout, its helper fns too: they get clippy.toml's test exemptions, so a failed
+// setup step panics right there.
+#![cfg(test)]
 
 use std::str::FromStr;
 
@@ -71,7 +69,7 @@ async fn instance(store: &Store) -> InstanceSpec {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap()

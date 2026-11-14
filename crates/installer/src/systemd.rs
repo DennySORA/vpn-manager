@@ -196,7 +196,10 @@ impl Supervisor for Systemd {
             "systemctl --user daemon-reload",
         )?;
         for job in jobs {
-            // Clears a failed state left behind; nothing to clear is fine.
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "clears a failed state left behind; nothing to clear, or no answer, is fine"
+            )]
             let _ = Self::systemctl(&["reset-failed", &job.name]);
         }
         Ok(())

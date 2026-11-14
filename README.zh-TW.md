@@ -26,7 +26,7 @@
 - **代理埠**——在 `127.0.0.1` 上的本機代理（SOCKS5、HTTP，或同一個埠兩者都收；UDP 經 SOCKS5）。把瀏覽器或命令列工具指向它就行。
 - **受管 App**——由 VPN Manager 幫你啟動程式，並把它綁在一條連線上。有三種強度：
   - 「環境變數」：告訴程式去用代理埠。
-  - 「強制代理」（macOS）：程式除了代理埠之外哪裡都連不到。
+  - 「強制代理」（macOS）：程式除了代理埠之外哪裡都連不到，而且只能以 IPv4 連（Java 程式啟動時要加 `-Djava.net.preferIPv4Stack=true`）。
   - 「嚴格隔離」（Linux）：程式在自己的 network namespace 裡執行，tunnel 是唯一的網路介面。
 - **SSH**——讓指定的 SSH 主機經某條連線連出去；也能定時從遠端資料夾以 SFTP 抓新檔案（「SSH 下載」），而且只經 VPN。
 
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/
 選項接在 `sh -s --` 後面：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/install.sh | sh -s -- --version 0.1.0   # 指定版本
+curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/install.sh | sh -s -- --version 0.2.0   # 指定版本
 curl -fsSL https://raw.githubusercontent.com/DennySORA/vpn-manager/main/scripts/install.sh | sh -s -- --port 18765      # 其餘選項會交給安裝程式
 ```
 
@@ -153,7 +153,7 @@ vpnctl doctor                      # 檢查這份安裝
 
 ## 使用前要知道的事
 
-- **這是 0.1.0**。它每天在 Linux x86_64 上使用。macOS 與 Linux aarch64 的安裝檔由 release 流程建置，但實際使用的經驗少得多；嚴格隔離只有 Linux 有。API、設定與資料格式之後還可能有不相容的變更。
+- **這是 0.2.0**。它每天在 Linux x86_64 上使用。macOS 與 Linux aarch64 的安裝檔由 release 流程建置，但實際使用的經驗少得多；嚴格隔離只有 Linux 有。API、設定與資料格式之後還可能有不相容的變更。
 - **沒有登入**。預設情況下，網頁介面與 API 只在這台電腦上回應，而且只回應同一個使用者的程式。能使用它們的人就能以你的身分啟動程式，所以請把這個存取權當成一個 shell。開放給區網之後，你列出的網段裡每一台裝置都有同樣的權限，而且走的是未加密的 HTTP。
 - **代理埠沒有密碼**。這台電腦上的任何程式都能經代理埠使用執行中的連線。
 - **隔離管的是網路路徑**。嚴格隔離讓 tunnel 成為程式唯一的出路；它不是用來執行不信任程式碼的沙箱。

@@ -199,9 +199,9 @@ fn key_at(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Option<StoredHos
 fn state_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SshDownloadStateRow> {
     let id: String = r.get(0)?;
     Ok(SshDownloadStateRow {
-        job_id: id
-            .parse()
-            .map_err(|_| rusqlite::Error::InvalidColumnName("job_id".into()))?,
+        job_id: id.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?,
         paused: r.get::<_, i64>(1)? != 0,
         host_key: key_at(r, 2)?,
         offered_host_key: key_at(r, 7)?,
@@ -228,7 +228,9 @@ fn transfer_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SshDownloadTransferRo
     let done: Option<i64> = r.get(10)?;
     Ok(SshDownloadTransferRow {
         id: r.get(0)?,
-        job_id: job.parse().map_err(|_| bad("job_id"))?,
+        job_id: job.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e))
+        })?,
         name: r.get(2)?,
         state: state_of(&state).ok_or_else(|| bad("state"))?,
         source_path: r.get(4)?,

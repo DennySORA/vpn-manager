@@ -2,10 +2,7 @@
 //! guard applies there); a stale socket file of ours is replaced, a live one or anything that is
 //! not our socket is never touched.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::Path;
 use std::sync::Arc;

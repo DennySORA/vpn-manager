@@ -13,7 +13,7 @@
 
 #[cfg_attr(
     not(target_os = "linux"),
-    allow(
+    expect(
         dead_code,
         reason = "only Linux has the strict data path; elsewhere the packet logic runs in its tests"
     )
@@ -21,7 +21,7 @@
 mod filter;
 #[cfg_attr(
     not(target_os = "linux"),
-    allow(
+    expect(
         dead_code,
         reason = "only Linux has the strict data path; elsewhere the packet logic runs in its tests"
     )
@@ -29,7 +29,7 @@ mod filter;
 mod flows;
 #[cfg_attr(
     not(target_os = "linux"),
-    allow(
+    expect(
         dead_code,
         reason = "only Linux has the strict data path; elsewhere the packet logic runs in its tests"
     )
@@ -43,7 +43,10 @@ mod tun;
 #[cfg(target_os = "linux")]
 mod tunnel;
 
-pub use filter::{DestinationCheck, DirectUdpOpen, DirectUdpPolicy, DirectUdpPort, FilterStats};
+pub use filter::{
+    DestinationCheck, DirectUdpOpen, DirectUdpPolicy, DirectUdpPort, FilterStats, PortPayload,
+};
+pub use flows::L4;
 
 #[cfg(target_os = "linux")]
 pub use connector::{KernelConnector, KernelDatagram, KernelListener, KernelPort, KernelStream};

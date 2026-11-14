@@ -5,10 +5,7 @@
 //! PROXY protocol header are exercised on that real path. UDP straight into a sandbox needs the
 //! strict plane (`crates/vpnd/tests/strict.rs`); here, without one, it is never relayed instead.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -70,7 +67,7 @@ async fn lab(auto_ban: AutoBanSettings, deny: &[&str]) -> Lab {
     })
     .await
     .unwrap();
-    let _ = client.netstack().set_gate(GateState::Open);
+    assert_eq!(client.netstack().set_gate(GateState::Open), GateState::Open);
     client.handshake(Duration::from_secs(5)).await.unwrap();
     let overlay = Overlay::new(
         1,
@@ -180,6 +177,10 @@ impl App {
             while let Ok((mut s, _)) = listener.accept().await {
                 tokio::spawn(async move {
                     let (mut r, mut w) = s.split();
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "the echo ends with its connection, however that ends (forwards reset some)"
+                    )]
                     let _ = tokio::io::copy(&mut r, &mut w).await;
                 });
             }
@@ -189,6 +190,10 @@ impl App {
         let u = tokio::spawn(async move {
             let mut buf = [0u8; 2048];
             while let Ok((n, from)) = socket.recv_from(&mut buf).await {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "an echo not sent shows as the missing reply the waiting test reports"
+                )]
                 let _ = socket.send_to(&buf[..n], from).await;
             }
         });
@@ -230,7 +235,7 @@ async fn round_trip(s: &mut TcpStream, data: &[u8]) -> io::Result<()> {
     let mut got = vec![0u8; data.len()];
     tokio::time::timeout(Duration::from_secs(3), s.read_exact(&mut got))
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "no echo"))??;
+        .map_err(|_elapsed| io::Error::new(io::ErrorKind::TimedOut, "no echo"))??;
     assert_eq!(got, data);
     Ok(())
 }
@@ -298,13 +303,19 @@ async fn a_tightened_gate_refuses_new_connections_and_keeps_open_ones() {
     let mut open = lab.dial(lab_ip(), 40_002).await.unwrap();
     round_trip(&mut open, b"open").await.unwrap();
 
-    let _ = lab.client.netstack().set_gate(GateState::Probe);
+    assert_eq!(
+        lab.client.netstack().set_gate(GateState::Probe),
+        GateState::Probe
+    );
     lab.forwards.reconcile();
     assert!(!lab.status(f.id).tcp_listening);
     assert!(refused(&lab, lab_ip(), 40_002).await);
     round_trip(&mut open, b"kept").await.unwrap();
 
-    let _ = lab.client.netstack().set_gate(GateState::Open);
+    assert_eq!(
+        lab.client.netstack().set_gate(GateState::Open),
+        GateState::Open
+    );
     lab.forwards.reconcile();
     assert!(lab.status(f.id).tcp_listening);
     let mut again = lab.dial(lab_ip(), 40_002).await.unwrap();

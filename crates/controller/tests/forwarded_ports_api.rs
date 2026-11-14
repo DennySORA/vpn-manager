@@ -7,10 +7,7 @@
 //! selected VPN egress (no egress: refused; the one-time direct grant: refused, since none of
 //! these builds an egress). Nothing reaches a provider or a network.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

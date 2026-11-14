@@ -276,7 +276,7 @@ fn addresses(ips_entry: Option<&str>, ips_exit: Option<&str>) -> Result<Addresse
 
 pub fn parse_manifest(xml: &str) -> Result<ServerCatalog, ProviderError> {
     let drift = manifest_drift;
-    let doc = Document::parse(xml).map_err(|_| drift())?;
+    let doc = Document::parse(xml).map_err(|_malformed| drift())?;
     let manifest = doc.root();
     // Eddie `FetchUrls`: an `error` on the document element is the server's refusal; the
     // request's only input of the caller's is the credentials.
@@ -515,7 +515,8 @@ fn clean_text(value: &str, max: usize) -> Option<String> {
         .char_indices()
         .nth(max)
         .map_or(kept.len(), |(at, _)| at);
-    let text = kept[..end].trim_end();
+    // `end` is where a character starts (or the end), so the cut never fails.
+    let text = kept.get(..end)?.trim_end();
     (!text.is_empty()).then(|| text.to_owned())
 }
 

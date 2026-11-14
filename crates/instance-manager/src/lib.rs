@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod actor;
+mod app_payload;
 pub mod apps;
 pub mod bootstrap;
 mod downloads;
@@ -150,6 +151,60 @@ impl Ctx {
     }
 }
 
+/// Hand `answer` to whoever asked through `reply`. An asker that no longer waits (it gave up
+/// after its own timeout, or the call that asked ended) does not need it: the answer is dropped.
+pub(crate) fn deliver<T>(reply: oneshot::Sender<T>, answer: T) {
+    if reply.send(answer).is_err() {
+        tracing::trace!("answer dropped: its asker no longer waits");
+    }
+}
+
+/// Publish `event` to the subscribers there are now. With none (no controller connected), it is
+/// dropped: events are never kept for a later subscriber.
+pub(crate) fn send_event(events: &broadcast::Sender<ManagerEvent>, event: ManagerEvent) {
+    if events.send(event).is_err() {
+        tracing::trace!("event dropped: nobody subscribes");
+    }
+}
+
+/// Remove a file that is no longer needed. One that is gone already is what was wanted; one that
+/// cannot be removed stays behind for whoever finds it later (logged).
+pub(crate) fn remove_file_if_present(path: &Path) {
+    log_not_removed(path, std::fs::remove_file(path));
+}
+
+/// [`remove_file_if_present`] for a directory and everything in it.
+pub(crate) fn remove_dir_if_present(path: &Path) {
+    log_not_removed(path, std::fs::remove_dir_all(path));
+}
+
+fn log_not_removed(path: &Path, removed: std::io::Result<()>) {
+    if let Err(e) = removed
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::debug!(path = %path.display(), error = %e, "not removed: it stays behind");
+    }
+}
+
+/// Tell an actor something it acts on by itself, without an answer. An actor that is gone has
+/// nothing left to act on: its Instance was removed, the manager stops, or it failed — and its
+/// replacement reads the stored state when it starts.
+async fn tell(tx: &mpsc::Sender<ActorCmd>, cmd: ActorCmd) {
+    if tx.send(cmd).await.is_err() {
+        tracing::trace!("command dropped: the connection's actor is gone");
+    }
+}
+
+/// The Instance is gone: so is the marker of its pending stop, if it has one.
+async fn forget_stop(stops: Arc<stops::PendingStops>, id: InstanceId) {
+    match tokio::task::spawn_blocking(move || stops.forget(id)).await {
+        Ok(Ok(())) => {}
+        _ => {
+            tracing::warn!(instance = %id, "pending-stop marker of a deleted Instance not removed");
+        }
+    }
+}
+
 /// Result of a stop / emergency stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopOutcome {
@@ -172,7 +227,7 @@ fn spawn_operation_pruning(store: Arc<Store>) {
     const KEEP_MILLIS: i64 = 720 * 3_600_000;
     const MAX: usize = 10_000;
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_hours(6));
+        let mut tick = tokio::time::interval(Duration::from_hours(6));
         loop {
             tick.tick().await;
             let cutoff = Timestamp::from_unix_millis(Timestamp::now().unix_millis() - KEEP_MILLIS);
@@ -225,6 +280,12 @@ pub struct Manager {
     downloads: std::sync::OnceLock<Arc<vpn_ssh_download::SshDownloads>>,
     /// This manager, for the tasks that watch its actors.
     me: Weak<Self>,
+}
+
+impl std::fmt::Debug for Manager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Manager").finish_non_exhaustive()
+    }
 }
 
 /// After an actor failed, how long until its replacement starts: soon, but not in a loop when
@@ -407,7 +468,7 @@ impl Manager {
         routes.follow(self.subscribe());
         let events = self.ctx.events.clone();
         let publish: vpn_ssh_download::Publish = Arc::new(move |s| {
-            let _ = events.send(ManagerEvent::SshDownloadStatus(Box::new(s)));
+            send_event(&events, ManagerEvent::SshDownloadStatus(Box::new(s)));
         });
         match vpn_ssh_download::SshDownloads::start(
             store,
@@ -418,7 +479,10 @@ impl Manager {
         .await
         {
             Ok(d) => {
-                let _ = self.downloads.set(d);
+                // Started once, by `start`: a second one would find the first in place.
+                if self.downloads.set(d).is_err() {
+                    tracing::warn!("SSH download started twice; the second one is dropped");
+                }
             }
             Err(e) => tracing::warn!(error = %e, "SSH download not started"),
         }
@@ -720,7 +784,7 @@ impl Manager {
             stops::mirror(self.ctx.stops.clone(), id, h.clone()).await;
         }
         let tx = self.ensure_actor(id);
-        let _ = tx.send(ActorCmd::Reconcile { user: true }).await;
+        tell(&tx, ActorCmd::Reconcile { user: true }).await;
         self.status(id).await
     }
 
@@ -778,7 +842,7 @@ impl Manager {
             };
             let store = self.ctx.store.clone();
             tokio::spawn(async move {
-                let _ = answer.send(store.change_intent(id, change).await.is_ok());
+                deliver(answer, store.change_intent(id, change).await.is_ok());
             });
         }
         let sealed = match &entry {
@@ -809,7 +873,7 @@ impl Manager {
         }
         // Make the actor observe the (possibly) updated intent.
         if let Some((tx, _)) = &entry {
-            let _ = tx.send(ActorCmd::Reconcile { user: false }).await;
+            tell(tx, ActorCmd::Reconcile { user: false }).await;
         }
         // Its worker is gone and its key lease with it: a start refused that key may go ahead.
         self.ctx.key_released();
@@ -842,7 +906,7 @@ impl Manager {
             stops::mirror(self.ctx.stops.clone(), id, h.clone()).await;
         }
         if let Some(tx) = self.actor(id) {
-            let _ = tx.send(ActorCmd::Reconcile { user: true }).await;
+            tell(&tx, ActorCmd::Reconcile { user: true }).await;
         }
         self.status(id).await
     }
@@ -863,8 +927,9 @@ impl Manager {
                 })
                 .await
                 .is_ok()
+                && rx.await.is_err()
             {
-                let _ = rx.await;
+                tracing::trace!(instance = %id, "the actor ended before it confirmed the stop");
             }
         }
         self.start_instance(id).await
@@ -877,17 +942,15 @@ impl Manager {
     /// `NotFound` without an actor for `id`, `Unavailable` when the actor is gone, `Timeout`
     /// when it does not answer in time.
     pub async fn status(&self, id: InstanceId) -> Result<InstanceStatus, ApiError> {
-        let tx = self
-            .actor(id)
-            .ok_or_else(|| ApiError::not_found("Instance"))?;
+        let tx = self.actor(id).ok_or_else(ApiError::connection_not_found)?;
         let (reply, rx) = oneshot::channel();
         tx.send(ActorCmd::Inspect(reply))
             .await
-            .map_err(|_| interrupted())?;
+            .map_err(|_closed| interrupted())?;
         tokio::time::timeout(Duration::from_secs(5), rx)
             .await
-            .map_err(|_| status_timed_out())?
-            .map_err(|_| interrupted())
+            .map_err(|_elapsed| status_timed_out())?
+            .map_err(|_closed| interrupted())
     }
 
     /// Where the controller reaches the Instance's private connector, and for which generation.
@@ -898,17 +961,15 @@ impl Manager {
     /// `NotFound` without an actor, `Unavailable` when the actor is gone, `Timeout` when it does
     /// not answer in time, `InvalidState` when the Instance is not Ready with its gate open.
     pub async fn provider_route(&self, id: InstanceId) -> Result<(u64, String), ApiError> {
-        let tx = self
-            .actor(id)
-            .ok_or_else(|| ApiError::not_found("Instance"))?;
+        let tx = self.actor(id).ok_or_else(ApiError::connection_not_found)?;
         let (reply, rx) = oneshot::channel();
         tx.send(ActorCmd::Route(reply))
             .await
-            .map_err(|_| interrupted())?;
+            .map_err(|_closed| interrupted())?;
         tokio::time::timeout(Duration::from_secs(5), rx)
             .await
-            .map_err(|_| status_timed_out())?
-            .map_err(|_| interrupted())?
+            .map_err(|_elapsed| status_timed_out())?
+            .map_err(|_closed| interrupted())?
             .ok_or_else(|| {
                 ApiError::new(
                     ErrorCode::InvalidState,
@@ -947,16 +1008,14 @@ impl Manager {
         id: InstanceId,
         spec: vpn_platform::sandbox::SpawnSpec,
     ) -> Result<vpn_platform::sandbox::SandboxProcess, ApiError> {
-        let tx = self
-            .actor(id)
-            .ok_or_else(|| ApiError::not_found("Instance"))?;
+        let tx = self.actor(id).ok_or_else(ApiError::connection_not_found)?;
         let (reply, rx) = oneshot::channel();
         tx.send(ActorCmd::SandboxSpawn(Box::new(spec), reply))
             .await
-            .map_err(|_| interrupted())?;
+            .map_err(|_closed| interrupted())?;
         tokio::time::timeout(Duration::from_secs(30), rx)
             .await
-            .map_err(|_| {
+            .map_err(|_elapsed| {
                 ApiError::new(
                     ErrorCode::Timeout,
                     tr!(
@@ -966,20 +1025,20 @@ impl Manager {
                     ),
                 )
             })?
-            .map_err(|_| interrupted())?
+            .map_err(|_closed| interrupted())?
     }
 
     /// Gateway configuration of an Instance changed.
     pub async fn gateways_changed(&self, id: InstanceId) {
         if let Some(tx) = self.actor(id) {
-            let _ = tx.send(ActorCmd::GatewaysChanged).await;
+            tell(&tx, ActorCmd::GatewaysChanged).await;
         }
     }
 
     /// Port forwards of an Instance were saved or deleted: a running worker gets them at once.
     pub async fn forwards_changed(&self, id: InstanceId) {
         if let Some(tx) = self.actor(id) {
-            let _ = tx.send(ActorCmd::ForwardsChanged).await;
+            tell(&tx, ActorCmd::ForwardsChanged).await;
         }
     }
 
@@ -1003,10 +1062,10 @@ impl Manager {
         let (reply, rx) = oneshot::channel();
         tx.send(ActorCmd::ForwardStatus(binding.id, reply))
             .await
-            .map_err(|_| interrupted())?;
+            .map_err(|_closed| interrupted())?;
         tokio::time::timeout(Duration::from_secs(5), rx)
             .await
-            .map_err(|_| {
+            .map_err(|_elapsed| {
                 ApiError::new(
                     ErrorCode::Timeout,
                     tr!(
@@ -1016,7 +1075,7 @@ impl Manager {
                     ),
                 )
             })?
-            .map_err(|_| interrupted())?
+            .map_err(|_closed| interrupted())?
             .ok_or_else(|| ApiError::not_found(tr!("the port forward", "轉發", "ポート転送")))
     }
 
@@ -1073,18 +1132,12 @@ impl Manager {
         let entry = self.actors.lock().remove(&id);
         if let Some(entry) = entry {
             let (reply, rx) = oneshot::channel();
-            if entry.tx.send(ActorCmd::Remove(reply)).await.is_ok() {
-                let _ = rx.await;
+            if entry.tx.send(ActorCmd::Remove(reply)).await.is_ok() && rx.await.is_err() {
+                tracing::trace!(instance = %id, "the actor ended before it confirmed the removal");
             }
         }
         // So did its pending stop, if any.
-        let stops = self.ctx.stops.clone();
-        match tokio::task::spawn_blocking(move || stops.forget(id)).await {
-            Ok(Ok(())) => {}
-            _ => {
-                tracing::warn!(instance = %id, "pending-stop marker of a deleted Instance not removed");
-            }
-        }
+        forget_stop(self.ctx.stops.clone(), id).await;
         // Its key leases went with it.
         self.ctx.key_released();
     }
@@ -1107,18 +1160,28 @@ impl Manager {
         self.apps.shutdown().await;
         self.flush_stops().await;
         let actors: Vec<_> = self.actors.lock().drain().collect();
-        for (_, entry) in actors {
+        for (id, entry) in actors {
             let (reply, rx) = oneshot::channel();
-            if entry.tx.send(ActorCmd::Shutdown(reply)).await.is_ok() {
-                let _ = tokio::time::timeout(Duration::from_secs(5), rx).await;
+            if entry.tx.send(ActorCmd::Shutdown(reply)).await.is_ok()
+                && !matches!(
+                    tokio::time::timeout(Duration::from_secs(5), rx).await,
+                    Ok(Ok(()))
+                )
+            {
+                tracing::debug!(instance = %id, "the actor did not confirm its shutdown in time");
             }
         }
         // Best effort: the last queued samples.
-        let _ = tokio::time::timeout(
+        match tokio::time::timeout(
             Duration::from_secs(2),
             self.ctx.metrics.flush(&self.ctx.store),
         )
-        .await;
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => tracing::debug!(error = %e, "the last metrics samples not stored"),
+            Err(_elapsed) => tracing::debug!("the last metrics samples not stored in time"),
+        }
     }
 
     /// Before exiting: one more attempt at every stop latch that is not on disk, and the marker
@@ -1194,7 +1257,7 @@ async fn latch(
             if !state.stopped || state.durable {
                 // A later Start lifted this stop, or a later write already put it on disk.
                 if let Some(answer) = answer.take() {
-                    let _ = answer.send(state.durable);
+                    deliver(answer, state.durable);
                 }
                 return;
             }
@@ -1204,9 +1267,7 @@ async fn latch(
             Ok(_) => {
                 hold.latched(epoch);
                 match answer.take() {
-                    Some(answer) => {
-                        let _ = answer.send(true);
-                    }
+                    Some(answer) => deliver(answer, true),
                     // A retry: the stop request has long answered. Only now does the Store say
                     // stopped, which is what frees a key lease the stop could not release.
                     None => ctx.key_released(),
@@ -1218,16 +1279,15 @@ async fn latch(
             // The Instance is gone: there is nothing left to latch.
             Err(StoreError::NotFound) => {
                 if let Some(answer) = answer.take() {
-                    let _ = answer.send(false);
+                    deliver(answer, false);
                 }
-                let stops = ctx.stops.clone();
-                let _ = tokio::task::spawn_blocking(move || stops.forget(id)).await;
+                forget_stop(ctx.stops.clone(), id).await;
                 return;
             }
             Err(e) => {
                 tracing::warn!(instance = %id, error = %e, retry_in = ?delay, "stop latch not on disk");
                 if let Some(answer) = answer.take() {
-                    let _ = answer.send(false);
+                    deliver(answer, false);
                 }
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(LATCH_RETRY_MAX);

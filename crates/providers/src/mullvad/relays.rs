@@ -24,7 +24,7 @@ use vpn_domain::{WgKey, tr};
 
 use super::types::Device;
 use crate::display_text;
-use crate::error::ProviderError;
+use crate::error::{ProviderError, from_json};
 use crate::https::Family;
 
 /// Port profiles use when the catalog's port ranges include it.
@@ -206,7 +206,7 @@ pub fn parse_multihop(body: &[u8]) -> Result<MultihopPorts, ProviderError> {
             "マルチホップのサーバー一覧"
         ))
     };
-    let raw: Vec<RawWwwRelay> = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: Vec<RawWwwRelay> = from_json(body, drift)?;
     if raw.len() > MAX_RELAYS {
         return Err(drift());
     }
@@ -343,7 +343,7 @@ struct Place {
 /// is beyond the bounds.
 pub fn parse_catalog(body: &[u8]) -> Result<RelayCatalog, ProviderError> {
     let drift = || ProviderError::ContractDrift(tr!("server list", "伺服器清單", "サーバー一覧"));
-    let raw: RawCatalog = serde_json::from_slice(body).map_err(|_| drift())?;
+    let raw: RawCatalog = from_json(body, drift)?;
     let RawWireGuard {
         port_ranges,
         ipv4_gateway,
@@ -384,9 +384,16 @@ pub fn parse_catalog(body: &[u8]) -> Result<RelayCatalog, ProviderError> {
         if !valid_hostname(&relay.hostname) || !hostnames.insert(relay.hostname.clone()) {
             return Err(drift());
         }
-        let public_key: WgKey = relay.public_key.parse().map_err(|_| drift())?;
+        let public_key: WgKey = relay.public_key.parse().map_err(|error| {
+            tracing::debug!(
+                %error,
+                relay = %relay.hostname,
+                "Mullvad relay key is not a WireGuard key"
+            );
+            drift()
+        })?;
         let provider = display_text(&relay.provider, MAX_NAME)
-            .map_err(|_| drift())?
+            .map_err(|_not_text| drift())?
             .unwrap_or_default();
         let Some(place) = places.get(&relay.location) else {
             skipped += 1;

@@ -40,9 +40,9 @@ use ipnetwork::IpNetwork;
 use serde::{Deserialize, Serialize};
 use vpn_domain::ipset::IpRangeSet;
 use vpn_domain::{
-    AutoBanSettings, BandwidthCaps, CongestionStatus, DnsCacheSettings, DnsOnFailure, DnsServer,
-    ForwardBindingId, ForwardProtocol, GatewayId, GatewayKind, InstanceId, InstanceLimits,
-    PortRange, ResolvedTransport, Text,
+    AppId, AutoBanSettings, BandwidthCaps, CongestionStatus, DnsCacheSettings, DnsOnFailure,
+    DnsServer, ForwardBindingId, ForwardProtocol, GatewayId, GatewayKind, InstanceId,
+    InstanceLimits, PortRange, ResolvedTransport, Text,
 };
 
 use crate::secret::SecretBytes;
@@ -470,6 +470,40 @@ pub struct WorkerStatus {
     /// or from one that does not report it.
     #[serde(default)]
     pub sandbox: Option<SandboxWire>,
+    /// Strict mode: the Apps' payload of [`Self::sandbox`] per local port of the sandbox (the
+    /// App socket's port). An entry lives while its port carries payload and for a while after;
+    /// a port used again after that starts from 0. The manager turns it into
+    /// [`Self::app_payload`] and does not pass it on. Empty from a worker of an earlier release.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sandbox_ports: Vec<SandboxPortWire>,
+    /// Filled in by the manager, never by the worker: the payload of each managed App of this
+    /// connection, cumulative for the generation — its share of the sandbox's own flows (by the
+    /// ports its processes hold) and of the port forwards that end at it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub app_payload: Vec<AppPayloadWire>,
+}
+
+/// The Apps' payload through one local port of a strict sandbox (see
+/// [`WorkerStatus::sandbox_ports`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxPortWire {
+    pub udp: bool,
+    pub port: u16,
+    /// From the remote hosts to the App socket.
+    pub rx_bytes: u64,
+    /// From the App socket to the remote hosts.
+    pub tx_bytes: u64,
+}
+
+/// One managed App's payload, cumulative for the worker's generation (see
+/// [`WorkerStatus::app_payload`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppPayloadWire {
+    pub app_id: AppId,
+    /// From the remote hosts to the App.
+    pub rx_bytes: u64,
+    /// From the App to the remote hosts.
+    pub tx_bytes: u64,
 }
 
 impl WorkerStatus {

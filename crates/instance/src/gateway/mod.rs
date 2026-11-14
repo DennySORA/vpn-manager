@@ -85,7 +85,7 @@ pub struct GatewayConfig {
     pub tcp_idle_timeout: Duration,
     /// Installation key for the private SOCKS5 method with which this Gateway proves itself
     /// to `vpnctl` (see `vpn_ipc::identity::gateway_proof`).
-    pub auth_key: Option<std::sync::Arc<zeroize::Zeroizing<[u8; 32]>>>,
+    pub auth_key: Option<Arc<zeroize::Zeroizing<[u8; 32]>>>,
 }
 
 impl GatewayConfig {
@@ -107,6 +107,7 @@ impl GatewayConfig {
 }
 
 /// What a Gateway needs from its Instance.
+#[derive(Debug)]
 pub struct GatewayDeps<C: TunnelConnector, R: Resolve> {
     pub connector: C,
     pub resolver: R,
@@ -117,6 +118,7 @@ pub struct GatewayDeps<C: TunnelConnector, R: Resolve> {
 }
 
 /// A running Gateway. Dropping the handle stops it like [`Gateway::shutdown`], without waiting.
+#[derive(Debug)]
 pub struct Gateway {
     local_addr: SocketAddr,
     cancel: CancellationToken,
@@ -329,11 +331,17 @@ fn admit<C: TunnelConnector, R: Resolve>(
     counters.tcp_accepted.fetch_add(1, Ordering::Relaxed);
     let active = Gauge::new(counters, tcp_active);
     // Proxied traffic is often interactive; never delay small writes towards the client.
-    let _ = stream.set_nodelay(true);
+    if let Err(e) = stream.set_nodelay(true) {
+        tracing::debug!(gateway = %shared.config.id, error = %e, "TCP_NODELAY not set on a client connection");
+    }
     // Bounded kernel buffers: an upload waiting on the tunnel queues at most this much here
     // (left alone, macOS grows it to 4 MiB, and a few hundred such uploads exhaust the host's
     // network memory for every program on it).
-    let _ = vpn_platform::nobufs::fix_buffers(&stream, vpn_platform::nobufs::LOOPBACK_BUFFER);
+    if let Err(e) =
+        vpn_platform::nobufs::fix_buffers(&stream, vpn_platform::nobufs::LOOPBACK_BUFFER)
+    {
+        tracing::debug!(gateway = %shared.config.id, error = %e, "client connection buffers not fixed");
+    }
     let conn_shared = Arc::clone(shared);
     shared.tracker.spawn(async move {
         let _permit = permit;
@@ -344,7 +352,10 @@ fn admit<C: TunnelConnector, R: Resolve>(
 
 /// Close a refused connection at once with a reset, so it leaves no `TIME_WAIT` state behind.
 fn reject(stream: TcpStream) {
-    let _ = stream.set_zero_linger();
+    // Without the option the close is an orderly one: refused all the same.
+    if let Err(e) = stream.set_zero_linger() {
+        tracing::trace!(error = %e, "refused connection closed without a reset");
+    }
     drop(stream);
 }
 

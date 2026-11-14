@@ -116,7 +116,7 @@ impl KeyError {
 
 impl WgKey {
     #[must_use]
-    pub fn to_base64(&self) -> String {
+    pub fn to_base64(self) -> String {
         B64.encode(self.0)
     }
 }
@@ -124,8 +124,15 @@ impl WgKey {
 impl FromStr for WgKey {
     type Err = KeyError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "every key that is not 32 bytes of base64 gets the one fixed message `KeyError::Encoding`, which users see translated; which symbol or length broke the base64 is not part of it"
+        )]
         let bytes = B64.decode(s.trim()).map_err(|_| KeyError::Encoding)?;
-        let key: [u8; 32] = bytes.try_into().map_err(|_| KeyError::Encoding)?;
+        // The error hands back the decoded bytes; their wrong length is what `Encoding` says.
+        let key: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_not_32_bytes| KeyError::Encoding)?;
         if key == [0u8; 32] {
             return Err(KeyError::AllZero);
         }
@@ -177,6 +184,10 @@ impl fmt::Debug for SecretRef {
 
 impl FromStr for SecretRef {
     type Err = String;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a malformed reference gets the one fixed text `invalid secret id`, which serde passes on as the wire error; the UUID parser's detail is not part of it"
+    )]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let rest = s
             .strip_prefix("secret:")

@@ -1,0 +1,21 @@
+# typos (spelling of identifiers and documents): this project's own words that it would "correct".
+[default]
+# The `Location:` header matched in either case by install.sh, and commit ids in backticks.
+extend-ignore-re = ["\\[Ll\\]ocation", "`[0-9a-f]{7,40}`"]
+
+[default.extend-words]
+# Provider data: Tokyo in Mullvad's location codes (`jp-tyo-…`), Mullvad's DAITA feature.
+tyo = "tyo"
+daita = "daita"
+# Field and constant names of the C interfaces the platform layer calls: `msg_controllen`,
+# mach_timebase_info `numer`, netlink `RTA_OIF`; IPv6 Neighbor Discovery (`ND`).
+controllen = "controllen"
+numer = "numer"
+oif = "oif"
+nd = "nd"
+# A daemon name of the first design (docs/architecture.md §9).
+controllerd = "controllerd"
+
+[files]
+# Third-party sources kept as they are (vendor/README.md).
+extend-exclude = ["vendor/"]

@@ -84,7 +84,9 @@ fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppIntentRow> {
         }
     };
     Ok(AppIntentRow {
-        app_id: id.parse().map_err(|_| bad("app_id"))?,
+        app_id: id.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?,
         desired: if desired == "running" {
             DesiredState::Running
         } else {

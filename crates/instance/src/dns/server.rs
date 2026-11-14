@@ -37,6 +37,7 @@ const TCP_IDLE: Duration = Duration::from_secs(10);
 pub type GateOpen = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// A running DNS server. Dropping it stops it.
+#[derive(Debug)]
 pub struct DnsServer {
     cancel: CancellationToken,
     tracker: TaskTracker,
@@ -124,7 +125,7 @@ async fn serve_udp<C: TunnelConnector>(
         let query = buf[..n].to_vec();
         let Ok(permit) = slots.clone().try_acquire_owned() else {
             if let Some(r) = wire::error_response(&query, ResponseCode::ServFail) {
-                let _ = socket.send_to(&r, from).await;
+                send_answer(&socket, &r, from).await;
             }
             continue;
         };
@@ -152,7 +153,14 @@ async fn reply_udp<C: TunnelConnector>(
             None => return,
         }
     }
-    let _ = socket.send_to(&response, to).await;
+    send_answer(socket, &response, to).await;
+}
+
+/// Send one UDP answer. One that is lost is like any lost datagram: the App asks again.
+async fn send_answer(socket: &UdpSocket, answer: &[u8], to: SocketAddr) {
+    if let Err(e) = socket.send_to(answer, to).await {
+        tracing::trace!(error = %e, "DNS answer to a sandbox App not sent");
+    }
 }
 
 async fn serve_tcp<C: TunnelConnector>(

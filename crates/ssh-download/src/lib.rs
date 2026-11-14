@@ -53,7 +53,7 @@ use job::{Core, StartProblem};
 use status::{Board, StatusCell, host_key_view};
 
 /// How a Gateway can carry a job's connection now.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Route {
     /// Its loopback port and the key it proves itself with.
     Ready(Gateway),
@@ -193,6 +193,14 @@ pub struct SshDownloads {
     upkeep: CancellationToken,
 }
 
+impl std::fmt::Debug for SshDownloads {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshDownloads")
+            .field("closing", &self.closing)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Delete `job`'s log lines and finished records older than its keep period (`history_days`).
 async fn purge(store: &Store, job: &SshDownloadJob) {
     let Some(days) = job.history_days else {
@@ -230,8 +238,17 @@ async fn upkeep(store: Arc<Store>, every: Duration, stop: CancellationToken) {
                 purge(&store, job).await;
             }
         }
-        let _ = store.scrub_control_wal().await;
+        if let Err(e) = store.scrub_control_wal().await {
+            tracing::warn!(error = %e, "control database WAL not scrubbed; tried again at the next upkeep");
+        }
     }
+}
+
+/// A blocking task of an API call that did not finish (it panicked, or the runtime is shutting
+/// down): logged with its cause, and an internal error for the caller.
+fn unfinished(task: &'static str, e: &tokio::task::JoinError) -> ApiError {
+    tracing::warn!(task, error = %e, "SSH download blocking task did not finish");
+    ApiError::internal()
 }
 
 /// No home folder to resolve a `~/` path against.
@@ -512,10 +529,16 @@ impl SshDownloads {
                 // Never two runners of one job: this one ends at its next await.
                 tracing::warn!(job = %h.job.id, "SSH download runner did not stop within 10 s; aborted");
                 r.task.abort();
-                let _ = r.task.await;
+                // Awaited so that it has ended before another runner starts: it ends cancelled
+                // (or done, when it finished first).
+                if let Err(e) = r.task.await
+                    && e.is_panic()
+                {
+                    tracing::error!(job = %h.job.id, error = %e, "SSH download runner panicked");
+                }
             }
         }
-        h.cell.update(status::Board::stopped);
+        h.cell.update(Board::stopped);
     }
 
     pub async fn status(&self, id: SshDownloadJobId) -> Option<SshDownloadStatus> {
@@ -694,7 +717,7 @@ impl SshDownloads {
             Some(c) => {
                 let (at, rid) = c.split_once(':').ok_or_else(bad_cursor)?;
                 Some((
-                    at.parse::<i64>().map_err(|_| bad_cursor())?,
+                    at.parse::<i64>().map_err(|_not_a_number| bad_cursor())?,
                     rid.to_string(),
                 ))
             }
@@ -736,7 +759,7 @@ impl SshDownloads {
             .ok_or_else(|| ApiError::new(ErrorCode::InvalidState, no_home()))?;
         let mut check = tokio::task::spawn_blocking(move || local::LocalDir::check(&full))
             .await
-            .map_err(|_| ApiError::internal())?;
+            .map_err(|e| unfinished("checking a local folder", &e))?;
         check.path = path;
         Ok(SshDownloadReply::DirCheck(check))
     }
@@ -787,7 +810,7 @@ impl SshDownloads {
             .ok_or_else(|| field_error("/local_dir", "LOCAL_DIR_UNUSABLE", no_home()))?;
         tokio::task::spawn_blocking(move || local::LocalDir::open(&local, true))
             .await
-            .map_err(|_| ApiError::internal())?
+            .map_err(|e| unfinished("checking the local folder", &e))?
             .map_err(|e| field_error("/local_dir", "LOCAL_DIR_UNUSABLE", e.0))?;
         if let Some(file) = &job.identity_file {
             let passphrase: Option<Zeroizing<String>> = match &secrets.key_passphrase {
@@ -815,7 +838,7 @@ impl SshDownloads {
                 .map(|_| ())
             })
             .await
-            .map_err(|_| ApiError::internal())?
+            .map_err(|e| unfinished("reading the key", &e))?
             .map_err(|p| field_error(p.path, &p.reason.code, p.reason.message))?;
         }
         Ok(())
@@ -1013,10 +1036,32 @@ impl SshDownloads {
                 for row in open {
                     let path = PathBuf::from(&row.local_dir);
                     let rid = row.id.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
+                    let removed = tokio::task::spawn_blocking(move || {
                         local::LocalDir::open(&path, false).map(|d| d.remove_partial(&rid))
                     })
                     .await;
+                    match removed {
+                        Ok(Ok(Ok(()))) => {}
+                        // A folder that is gone or no longer usable is left alone.
+                        Ok(Err(why)) => tracing::debug!(
+                            job = %id,
+                            transfer = %row.id,
+                            error = %why,
+                            "partial file not removed: its folder cannot be opened"
+                        ),
+                        Ok(Ok(Err(e))) => tracing::warn!(
+                            job = %id,
+                            transfer = %row.id,
+                            error = %e,
+                            "partial file not removed"
+                        ),
+                        Err(e) => tracing::warn!(
+                            job = %id,
+                            transfer = %row.id,
+                            error = %e,
+                            "partial file not removed"
+                        ),
+                    }
                 }
                 Ok(())
             }

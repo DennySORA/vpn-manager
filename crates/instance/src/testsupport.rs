@@ -13,7 +13,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use vpn_tunnel::{FlowClass, TunnelConnector, TunnelDatagram};
 
 /// Loopback connector with a switchable "gate" to exercise `PermissionDenied` paths.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct LoopbackConnector {
     closed: Arc<AtomicBool>,
     /// When set, IPv6 destinations report `NetworkUnreachable` (tunnel without IPv6).
@@ -45,6 +45,7 @@ impl LoopbackConnector {
     }
 }
 
+#[derive(Debug)]
 pub struct LoopbackDatagram(UdpSocket, LoopbackConnector);
 
 impl TunnelDatagram for LoopbackDatagram {

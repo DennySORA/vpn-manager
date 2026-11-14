@@ -54,7 +54,7 @@ fn malformed() -> Text {
 
 /// The network epoch of one generation: advanced each time its payload gate opens, so a request
 /// authorized by an exit check made before the tunnel was last down is refused here.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct NetworkEpoch(Arc<AtomicU64>);
 
 impl NetworkEpoch {
@@ -70,6 +70,7 @@ impl NetworkEpoch {
 }
 
 /// The listening connector; dropping it stops accepting and removes the socket file.
+#[derive(Debug)]
 pub struct ConnectorSocket {
     path: PathBuf,
     cancel: CancellationToken,
@@ -105,7 +106,7 @@ impl ConnectorSocket {
         dns: R,
         policy: Arc<DestinationPolicy>,
     ) -> io::Result<Self> {
-        let _ = std::fs::remove_file(path);
+        remove_socket_file(path);
         let listener = UnixListener::bind(path)?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         let cancel = CancellationToken::new();
@@ -159,12 +160,25 @@ impl ConnectorSocket {
 impl Drop for ConnectorSocket {
     fn drop(&mut self) {
         self.cancel.cancel();
-        let _ = std::fs::remove_file(&self.path);
+        remove_socket_file(&self.path);
     }
 }
 
+/// Remove the socket file at `path`, if there is one. A file that cannot be removed only makes a
+/// later bind of the same path fail (which reports it); why it stayed is logged here.
+fn remove_socket_file(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        tracing::debug!(error = %e, "connector socket file not removed");
+    }
+}
+
+/// Send a refusal. A controller that already closed the connection does not need it.
 async fn answer(mut stream: UnixStream, reply: RelayAnswer) {
-    let _ = stream.write_all(&reply.to_bytes()).await;
+    if let Err(e) = stream.write_all(&reply.to_bytes()).await {
+        tracing::trace!(error = %e, "connector answer not delivered: the controller is gone");
+    }
 }
 
 async fn serve<C: TunnelConnector, R: Resolve>(
@@ -221,7 +235,9 @@ async fn serve<C: TunnelConnector, R: Resolve>(
     if stream.write_all(&ok.to_bytes()).await.is_err() {
         return;
     }
-    let _ = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await;
+    if let Err(e) = tokio::io::copy_bidirectional(&mut stream, &mut tunnel).await {
+        tracing::debug!(error = %e, "Provider relay ended with an error");
+    }
 }
 
 async fn dial<C: TunnelConnector, R: Resolve>(

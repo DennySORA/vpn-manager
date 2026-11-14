@@ -678,6 +678,23 @@ pub struct SandboxRates {
     pub evicted: u64,
     #[ts(type = "number")]
     pub table_full: u64,
+    /// Each App's part of `rx_bps`/`tx_bps`: its own flows (told apart by the ports its
+    /// processes hold) and the port forwards that end at it. Payload of a connection the App
+    /// supervisor had not seen yet is in the totals only, so the parts may sum to less. An App
+    /// with no rate this time (it just started, or its counter went back) is missing.
+    #[serde(default)]
+    pub apps: Vec<AppRates>,
+}
+
+/// One managed App's payload over one sample interval (bit/s).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AppRates {
+    pub app_id: AppId,
+    /// From the remote hosts to the App.
+    pub rx_bps: f64,
+    /// From the App to the remote hosts.
+    pub tx_bps: f64,
 }
 
 /// The bandwidth caps of a connection over one sample interval. A share or rate is null where
@@ -738,7 +755,7 @@ pub struct SecretMetadata {
 /// Server-sent events, one JSON object per `data:` line; `type` matches the SSE event name.
 // A wire message, published once and then shared behind an `Arc`: boxing the large variant
 // would only add an allocation.
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "an event is built, sent and dropped once; it is never stored in bulk, so boxing a variant saves nothing"
 )]

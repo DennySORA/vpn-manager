@@ -29,7 +29,7 @@ use crate::local::{LocalDir, PlaceError};
 use crate::names::{ResumePlan, join_remote, local_name, plan_resume, unique_name};
 use crate::pipeline::{Lane, Reads, Reply, Turn};
 use crate::record;
-use crate::session::{RemoteError, remote_error};
+use crate::session::{RemoteError, close_handle, remote_error};
 use crate::status::{Active, Reason};
 
 /// The longest wait after a failed attempt.
@@ -64,8 +64,10 @@ fn local_error(e: &std::io::Error) -> Failure {
     ))
 }
 
-/// A local file operation that did not finish (its thread went away).
-fn interrupted() -> Failure {
+/// A local file operation that did not finish (its thread panicked, or the runtime is shutting
+/// down): logged with its cause, which the reason the user sees leaves out.
+fn interrupted(e: &tokio::task::JoinError) -> Failure {
+    tracing::warn!(error = %e, "local file operation did not finish");
     Failure::Local(tr!(
         "A local file operation was interrupted",
         "本機檔案操作中斷",
@@ -79,7 +81,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, Failure> {
     tokio::task::spawn_blocking(f)
         .await
-        .map_err(|_| interrupted())?
+        .map_err(|e| interrupted(&e))?
         .map_err(|e| local_error(&e))
 }
 
@@ -497,8 +499,11 @@ impl Core {
                 .await
             {
                 Ok(()) => {
-                    if record::forgets_name(&self.job, row) {
-                        let _ = self.ctx.store.scrub_control_wal().await;
+                    if record::forgets_name(&self.job, row)
+                        && let Err(e) = self.ctx.store.scrub_control_wal().await
+                    {
+                        // Tried again with the next such record, and at the next upkeep.
+                        tracing::warn!(job = %self.job.id, error = %e, "control database WAL not scrubbed");
                     }
                     self.store_answers();
                     return Ok(());
@@ -535,6 +540,20 @@ impl Core {
         }
     }
 
+    /// Forget the record of a claim that never happened. A record that stays (the Store refused)
+    /// is continued at the job's next start and forgotten then, its working copy not being there
+    /// either.
+    async fn forget_record(&self, row: &SshDownloadTransferRow) {
+        if let Err(e) = self
+            .ctx
+            .store
+            .delete_ssh_download_transfer(row.id.clone())
+            .await
+        {
+            tracing::warn!(job = %self.job.id, transfer = %row.id, error = %e, "SSH download record not deleted");
+        }
+    }
+
     /// The folder the record downloads into: the job's, or the one it was taken for.
     async fn local_for(&self, row: &SshDownloadTransferRow) -> Result<Arc<LocalDir>, Text> {
         if std::path::Path::new(&row.local_dir) == self.local.path() {
@@ -543,7 +562,8 @@ impl Core {
         let path = std::path::PathBuf::from(&row.local_dir);
         tokio::task::spawn_blocking(move || LocalDir::open(&path, true))
             .await
-            .map_err(|_| {
+            .map_err(|e| {
+                tracing::warn!(job = %self.job.id, transfer = %row.id, error = %e, "checking the local folder did not finish");
                 tr!(
                     "Checking the local folder was interrupted",
                     "檢查本機資料夾時中斷",
@@ -598,11 +618,7 @@ impl Core {
                 Err(RemoteError::Missing) => {
                     // Nothing happened here. The file is gone (someone else took it), or the
                     // working folder is (then the folders are made again with the next listing).
-                    let _ = self
-                        .ctx
-                        .store
-                        .delete_ssh_download_transfer(row.id.clone())
-                        .await;
+                    self.forget_record(&row).await;
                     self.release(&name);
                     if c.session.sftp.stat(row.source_path.clone()).await.is_ok() {
                         self.folders_again();
@@ -614,7 +630,7 @@ impl Core {
                         record::file_ref(&self.job, &row),
                         record::scrub(&self.job, &row, &m),
                     );
-                    let _ = self.ctx.store.delete_ssh_download_transfer(row.id).await;
+                    self.forget_record(&row).await;
                     self.poison(&name);
                     self.ctx
                         .log(
@@ -770,11 +786,7 @@ impl Core {
             Err(RemoteError::Missing) => {
                 // Never moved: it is still in the source folder (the next listing finds it), or
                 // gone.
-                let _ = self
-                    .ctx
-                    .store
-                    .delete_ssh_download_transfer(row.id.clone())
-                    .await;
+                self.forget_record(row).await;
                 self.release(&row.name);
                 Step::Done { keep: true }
             }
@@ -825,7 +837,9 @@ impl Core {
                     .fetch(c, &handle, &mut file, plan.offset, size, active, help)
                     .await;
                 // What arrived stays: the next attempt resumes after it.
-                let _ = file.flush().await;
+                if let Err(e) = file.flush().await {
+                    tracing::debug!(job = %self.job.id, transfer = %row.id, error = %e, "partial file not flushed after the fetch");
+                }
                 fetched?;
             }
             file.flush().await.map_err(|e| local_error(&e))?;
@@ -852,7 +866,7 @@ impl Core {
             Ok(())
         }
         .await;
-        let _ = sftp.close(handle).await;
+        close_handle(sftp, handle).await;
         result
     }
 
@@ -952,7 +966,7 @@ impl Core {
 
     /// Fetch `[from, size)` into the partial file: through the connection's own lane, and —
     /// with `help` — through the job's connections that have nothing else to do.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "one attempt's parts, passed once by `download`: the connection and its handle, the local file, the range, the board entry and the offer"
     )]
@@ -1032,7 +1046,7 @@ impl Core {
             }
         };
         let served = self.serve(c, &handle, help).await;
-        let _ = sftp.close(handle).await;
+        close_handle(sftp, handle).await;
         match served {
             Ok(None) => stay(true),
             Ok(Some(Leave::Work(task))) => Helped {
@@ -1272,7 +1286,7 @@ impl Core {
                 dir.sync().map_err(PlaceError::Io)
             })
             .await
-            .map_err(|_| interrupted())?;
+            .map_err(|e| interrupted(&e))?;
             match placed {
                 Ok(()) => return Ok(true),
                 Err(PlaceError::Exists) => {

@@ -2,13 +2,10 @@
 //! follow-up of a change whose answer was lost (looked up by its Idempotency-Key, never sent
 //! twice).
 
-#![allow(
+#![cfg(test)]
+#![expect(
     unsafe_code,
     reason = "libc pty, termios and write FFI for the hidden-prompt test"
-)]
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
 )]
 
 use std::collections::HashMap;
@@ -57,7 +54,7 @@ fn view(name: &str) -> InstanceView {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         },
         profile: None,
         gateways: vec![],
@@ -733,7 +730,7 @@ async fn handle(
             || {
                 json(
                     StatusCode::NOT_FOUND,
-                    &ApiError::new(ErrorCode::NotFound, "找不到operation"),
+                    &ApiError::new(ErrorCode::NotFound, "找不到這項操作"),
                 )
             },
             |op| json(StatusCode::OK, op),
@@ -835,6 +832,10 @@ fn serve(state: &Path, s: Arc<StandIn>) {
             let s = s.clone();
             tokio::spawn(async move {
                 let svc = hyper::service::service_fn(move |req| handle(s.clone(), req));
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a connection the stand-in drops on purpose (a lost answer) ends in an error; the tests check what vpnctl saw"
+                )]
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(TokioIo::new(stream), svc)
                     .await;
@@ -1002,7 +1003,7 @@ async fn names_must_be_unique_and_known() {
     assert_eq!(out.status.code(), Some(2));
     assert!(text(&out.stderr).contains("大阪"), "lists what exists");
     // A unique id prefix works (inspect of a view without status reports it unknown: exit 1).
-    let out = vpnctl(&state, &["instance", "inspect", &osaka[..8]]).await;
+    let out = vpnctl(&state, &["instance", "inspect", osaka.get(..8).unwrap()]).await;
     assert!(text(&out.stdout).contains("大阪"), "{}", text(&out.stdout));
 }
 
@@ -1522,22 +1523,28 @@ fn assert_port_changes_sent(s: &StandIn) {
 
 /// A pseudo-terminal: the side a user types into, and the terminal device a program reads.
 fn pty() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
-    use std::os::fd::FromRawFd;
-    // SAFETY: plain libc pty calls on descriptors this test owns; ptsname is read at once,
-    // before this test opens another pty.
-    unsafe {
-        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-        assert!(master >= 0, "posix_openpt");
-        assert_eq!(libc::grantpt(master), 0);
-        assert_eq!(libc::unlockpt(master), 0);
-        let name = std::ffi::CStr::from_ptr(libc::ptsname(master)).to_owned();
-        let slave = libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
-        assert!(slave >= 0, "open {name:?}");
-        (
-            std::os::fd::OwnedFd::from_raw_fd(master),
-            std::os::fd::OwnedFd::from_raw_fd(slave),
-        )
-    }
+    use std::os::fd::{FromRawFd, OwnedFd};
+    // SAFETY: posix_openpt has no preconditions; it returns a new descriptor or -1.
+    let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+    assert!(master >= 0, "posix_openpt");
+    // SAFETY: `master` is the pty master this test just opened.
+    assert_eq!(unsafe { libc::grantpt(master) }, 0);
+    // SAFETY: as for grantpt.
+    assert_eq!(unsafe { libc::unlockpt(master) }, 0);
+    // SAFETY: ptsname of the pty master this test owns: null or a pointer to static storage.
+    let name = unsafe { libc::ptsname(master) };
+    assert!(!name.is_null(), "ptsname");
+    // SAFETY: `name` is the NUL-terminated name ptsname returned; it is copied at once, before
+    // this test opens another pty.
+    let name = unsafe { std::ffi::CStr::from_ptr(name) }.to_owned();
+    // SAFETY: open with a NUL-terminated path; the result is a new descriptor or -1.
+    let slave = unsafe { libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+    assert!(slave >= 0, "open {name:?}");
+    // SAFETY: `master` was opened above and nothing else owns it.
+    let master = unsafe { OwnedFd::from_raw_fd(master) };
+    // SAFETY: `slave` was opened above and nothing else owns it.
+    let slave = unsafe { OwnedFd::from_raw_fd(slave) };
+    (master, slave)
 }
 
 fn echo_on(fd: &std::os::fd::OwnedFd) -> bool {
@@ -1583,18 +1590,17 @@ async fn on_a_terminal_the_credential_is_read_without_echo() {
     assert_eq!(usize::try_from(n).ok(), Some(typed.len()));
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     // What the terminal showed for it (a non-blocking read of the user side).
-    // SAFETY: fcntl and read on a descriptor this test owns, into a buffer of its size.
-    let shown = unsafe {
-        let fd = master.as_raw_fd();
-        libc::fcntl(
-            fd,
-            libc::F_SETFL,
-            libc::fcntl(fd, libc::F_GETFL) | libc::O_NONBLOCK,
-        );
-        let mut buf = [0u8; 256];
-        let got = libc::read(fd, buf.as_mut_ptr().cast(), buf.len());
-        String::from_utf8_lossy(&buf[..usize::try_from(got).unwrap_or(0)]).into_owned()
-    };
+    let fd = master.as_raw_fd();
+    // SAFETY: fcntl on a descriptor this test owns.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: as above.
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
+    let mut buf = [0u8; 256];
+    // SAFETY: read on a descriptor this test owns, into a buffer of the length given.
+    let got = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+    let shown = String::from_utf8_lossy(&buf[..usize::try_from(got).unwrap_or(0)]).into_owned();
     assert!(
         !shown.contains("1234") && !shown.contains("9012"),
         "{shown:?}"

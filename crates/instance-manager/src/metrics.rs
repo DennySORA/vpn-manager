@@ -286,6 +286,15 @@ pub struct MetricsCollector {
     maintenance: Mutex<Maintenance>,
 }
 
+impl std::fmt::Debug for MetricsCollector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MetricsCollector")
+            .field("capacity", &self.capacity)
+            .field("started", &self.started)
+            .finish_non_exhaustive()
+    }
+}
+
 impl MetricsCollector {
     #[must_use]
     pub fn new() -> Arc<Self> {
@@ -669,10 +678,12 @@ pub async fn series(
             .is_some(),
     };
     if !exists {
-        return Err(ApiError::not_found(match scope {
-            MetricsScope::Gateway(_) => tr!("this Gateway", "這個代理埠", "このゲートウェイ"),
-            _ => tr!("this connection", "這條連線", "この接続"),
-        }));
+        return Err(match scope {
+            MetricsScope::Gateway(_) => {
+                ApiError::not_found(tr!("this Gateway", "這個代理埠", "このゲートウェイ"))
+            }
+            _ => ApiError::connection_not_found(),
+        });
     }
     let policy = MetricsPolicy::from_settings(&store.settings().await.map_err(|e| e.to_api())?);
     tokio::time::timeout(
@@ -680,7 +691,7 @@ pub async fn series(
         store.metrics_series(scope, range, now_ms(), policy.raw_retention_ms),
     )
     .await
-    .map_err(|_| timed_out())?
+    .map_err(|_elapsed| timed_out())?
     .map_err(|e| e.to_api())
 }
 
@@ -701,7 +712,7 @@ pub async fn status(
     let policy = MetricsPolicy::from_settings(&store.settings().await.map_err(|e| e.to_api())?);
     let db = tokio::time::timeout(QUERY_DEADLINE, store.metrics_status(now_ms()))
         .await
-        .map_err(|_| timed_out())?
+        .map_err(|_elapsed| timed_out())?
         .map_err(|e| e.to_api())?;
     let (last_rollup, last_retention) = {
         let m = collector.maintenance.lock();

@@ -41,6 +41,8 @@ use vpn_ipc::relay::{Admission, LINE_MAX, RelayAnswer as Reply, RelayFamily as F
 use vpn_store::{BootstrapRow, GrantEnd, Store, StoreError};
 use vpn_sync::Mutex;
 
+use crate::remove_file_if_present;
+
 /// How long one grant stays open.
 pub const GRANT_TTL: Duration = Duration::from_mins(10);
 /// How long a run's new connection may take to connect and have its exit verified before it is
@@ -78,7 +80,7 @@ struct Grant {
 impl Drop for Grant {
     fn drop(&mut self) {
         self.cancel.cancel();
-        let _ = std::fs::remove_file(&self.path);
+        remove_file_if_present(&self.path);
     }
 }
 
@@ -103,6 +105,15 @@ pub struct Bootstrap {
     /// Held across every decision about direct access: opening (with its eligibility check),
     /// claiming the run's connection, the seal, ending a run.
     decisions: tokio::sync::Mutex<()>,
+}
+
+impl std::fmt::Debug for Bootstrap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Bootstrap")
+            .field("run_dir", &self.run_dir)
+            .field("ttl", &self.ttl)
+            .finish_non_exhaustive()
+    }
 }
 
 fn grant_id() -> String {
@@ -265,7 +276,7 @@ impl Bootstrap {
         let listener = match bind_private(&path) {
             Ok(l) => l,
             Err(e) => {
-                let _ = self
+                if let Err(closing) = self
                     .store
                     .close_bootstrap_grant(
                         run,
@@ -278,7 +289,10 @@ impl Bootstrap {
                             "直接接続のチャネルを開けませんでした"
                         ),
                     )
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %closing, "failed bootstrap grant not closed on record");
+                }
                 return Err(ApiError::new(
                     ErrorCode::Internal,
                     tr!(
@@ -526,11 +540,14 @@ async fn accept_loop(
             drop(permit);
         });
     }
-    let _ = std::fs::remove_file(&path);
+    remove_file_if_present(&path);
 }
 
+/// Best effort: a client that left gets nothing.
 async fn answer(mut stream: UnixStream, reply: Reply) {
-    let _ = stream.write_all(&reply.to_bytes()).await;
+    if let Err(e) = stream.write_all(&reply.to_bytes()).await {
+        tracing::trace!(error = %e, "bootstrap client not answered");
+    }
 }
 
 async fn serve(stream: UnixStream, policy: &Policy, admission: &Admission) {
@@ -604,7 +621,10 @@ async fn serve(stream: UnixStream, policy: &Policy, admission: &Admission) {
     if stream.write_all(&ok.to_bytes()).await.is_err() {
         return;
     }
-    let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+    // The relay ends when either side closes (or breaks) its connection.
+    if let Err(e) = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await {
+        tracing::debug!(error = %e, "direct connection relay ended with an error");
+    }
 }
 
 /// Resolve with the host's resolver (only allowlisted names reach here), keep the requested
@@ -669,7 +689,10 @@ async fn dial(
         let dst = SocketAddr::new(ip, port);
         match TcpStream::connect(dst).await {
             Ok(s) => {
-                let _ = s.set_nodelay(true);
+                // Only latency: the connection works without it.
+                if let Err(e) = s.set_nodelay(true) {
+                    tracing::debug!(error = %e, "TCP_NODELAY not set on a direct connection");
+                }
                 return Ok((s, dst));
             }
             Err(e) => {

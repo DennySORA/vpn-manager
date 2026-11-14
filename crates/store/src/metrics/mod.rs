@@ -600,10 +600,16 @@ impl Store {
             Err(e) if e.is_disk_full() => {
                 self.disk.skipped(spans.iter().map(|s| s.samples).sum());
                 // Not even the gap may fit: the span then stays unknown ("no data"), never zero.
-                let _ = self
+                if let Err(e) = self
                     .metrics
                     .write(move |c| record_unstored(c, &spans, &kept))
-                    .await;
+                    .await
+                {
+                    tracing::debug!(
+                        error = %e,
+                        "metrics: the gap of an unstored batch was not recorded either; its span stays unknown"
+                    );
+                }
                 Ok(Appended::Skipped)
             }
             Err(e) => Err(e),

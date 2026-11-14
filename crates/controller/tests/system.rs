@@ -2,10 +2,7 @@
 //! destination, account or name; recovery is inspected and reconciled; a manager that is
 //! stopping serves nothing and says so.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -108,7 +105,7 @@ async fn seed(store: &Store) {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();

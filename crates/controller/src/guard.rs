@@ -53,6 +53,14 @@ pub struct LanHosts {
     cache: vpn_sync::Mutex<(Option<Instant>, Vec<IpAddr>)>,
 }
 
+impl std::fmt::Debug for LanHosts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LanHosts")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
+}
+
 impl LanHosts {
     pub fn new(port: u16, source: AddressSource) -> Self {
         Self {

@@ -58,35 +58,34 @@ impl<'a> Document<'a> {
         let text = text.trim_prefix('\u{feff}');
         let mut elements: Vec<Element<'a>> = Vec::new();
         let mut open: Vec<usize> = Vec::new();
-        let mut pos = 0;
-        while let Some(found) = text[pos..].find('<') {
-            let start = pos + found;
-            check_text(&text[pos..start], !open.is_empty())?;
-            let markup = &text[start..];
-            let len = if markup.starts_with("<?") {
-                past(markup, 2, "?>")?
-            } else if markup.starts_with("<!--") {
-                past(markup, 4, "-->")?
-            } else if markup.starts_with("<![CDATA[") {
+        // What is left to read; every step cuts it after a markup's last character.
+        let mut rest = text;
+        while let Some(found) = rest.find('<') {
+            let (chars, markup) = rest.split_at_checked(found).ok_or(Malformed)?;
+            check_text(chars, !open.is_empty())?;
+            rest = if let Some(body) = markup.strip_prefix("<?") {
+                past(body, "?>")?
+            } else if let Some(body) = markup.strip_prefix("<!--") {
+                past(body, "-->")?
+            } else if let Some(body) = markup.strip_prefix("<![CDATA[") {
                 if open.is_empty() {
                     return Err(Malformed);
                 }
-                past(markup, 9, "]]>")?
+                past(body, "]]>")?
             } else if markup.starts_with("<!") {
                 // `<!DOCTYPE` (where entities are declared) and every other declaration.
                 return Err(Malformed);
             } else if let Some(tag) = markup.strip_prefix("</") {
-                let name = name_at(tag)?;
-                let rest = &tag[name.len()..];
-                let gap = rest.len() - rest.trim_start_matches(SPACE).len();
-                if !rest[gap..].starts_with('>') {
-                    return Err(Malformed);
-                }
+                let (name, after) = name_at(tag)?;
+                let after = after
+                    .trim_start_matches(SPACE)
+                    .strip_prefix('>')
+                    .ok_or(Malformed)?;
                 let top = open.pop().ok_or(Malformed)?;
                 if elements[top].name != name {
                     return Err(Malformed);
                 }
-                2 + name.len() + gap + 1
+                after
             } else {
                 // A second root, or past the bounds.
                 if (open.is_empty() && !elements.is_empty())
@@ -95,16 +94,15 @@ impl<'a> Document<'a> {
                 {
                     return Err(Malformed);
                 }
-                let (element, len, empty) = start_tag(markup, open.last().copied())?;
+                let (element, after, empty) = start_tag(markup, open.last().copied())?;
                 if !empty {
                     open.push(elements.len());
                 }
                 elements.push(element);
-                len
+                after
             };
-            pos = start + len;
         }
-        check_text(&text[pos..], !open.is_empty())?;
+        check_text(rest, !open.is_empty())?;
         if !open.is_empty() || elements.is_empty() {
             return Err(Malformed);
         }
@@ -168,43 +166,39 @@ impl<'a> Element<'a> {
     }
 }
 
-/// The start tag at the beginning of `markup`: the element, the tag's length, and whether it is
-/// an empty-element tag (`/>`).
-fn start_tag(markup: &str, parent: Option<usize>) -> Result<(Element<'_>, usize, bool), Malformed> {
-    let name = name_at(&markup[1..])?;
-    let mut at = 1 + name.len();
+/// The start tag at the beginning of `markup`: the element, the text after the tag, and whether
+/// it is an empty-element tag (`/>`).
+fn start_tag(markup: &str, parent: Option<usize>) -> Result<(Element<'_>, &str, bool), Malformed> {
+    let (name, mut rest) = name_at(markup.strip_prefix('<').ok_or(Malformed)?)?;
     let mut attributes: Vec<(&str, &str)> = Vec::new();
     loop {
-        let rest = &markup[at..];
-        let gap = rest.len() - rest.trim_start_matches(SPACE).len();
-        let rest = &rest[gap..];
-        at += gap;
-        if rest.starts_with('>') {
-            return Ok((element(name, parent, attributes), at + 1, false));
+        let spaced = rest.trim_start_matches(SPACE);
+        if let Some(after) = spaced.strip_prefix('>') {
+            return Ok((element(name, parent, attributes), after, false));
         }
-        if rest.starts_with("/>") {
-            return Ok((element(name, parent, attributes), at + 2, true));
+        if let Some(after) = spaced.strip_prefix("/>") {
+            return Ok((element(name, parent, attributes), after, true));
         }
-        if gap == 0 || attributes.len() == MAX_ATTRIBUTES {
+        // White space before every attribute.
+        if spaced.len() == rest.len() || attributes.len() == MAX_ATTRIBUTES {
             return Err(Malformed);
         }
-        let attribute = name_at(rest)?;
-        let after_name = &rest[attribute.len()..];
-        let before_eq = after_name.len() - after_name.trim_start_matches(SPACE).len();
-        let after_eq = after_name[before_eq..].strip_prefix('=').ok_or(Malformed)?;
-        let before_quote = after_eq.len() - after_eq.trim_start_matches(SPACE).len();
-        let quoted = &after_eq[before_quote..];
-        let Some(quote @ ('"' | '\'')) = quoted.chars().next() else {
+        let (attribute, after_name) = name_at(spaced)?;
+        let after_eq = after_name
+            .trim_start_matches(SPACE)
+            .strip_prefix('=')
+            .ok_or(Malformed)?;
+        let mut quoted = after_eq.trim_start_matches(SPACE).chars();
+        let Some(quote @ ('"' | '\'')) = quoted.next() else {
             return Err(Malformed);
         };
-        let value_len = quoted[1..].find(quote).ok_or(Malformed)?;
-        let value = &quoted[1..=value_len];
+        let (value, after_value) = quoted.as_str().split_once(quote).ok_or(Malformed)?;
         if value.contains('<') || attributes.iter().any(|(n, _)| *n == attribute) {
             return Err(Malformed);
         }
         check_references(value)?;
         attributes.push((attribute, value));
-        at += attribute.len() + before_eq + 1 + before_quote + value_len + 2;
+        rest = after_value;
     }
 }
 
@@ -220,20 +214,19 @@ const fn element<'a>(
     }
 }
 
-/// Length of `markup` through the first `close` after its first `skip` bytes.
-fn past(markup: &str, skip: usize, close: &str) -> Result<usize, Malformed> {
-    markup[skip..]
-        .find(close)
-        .map(|at| skip + at + close.len())
+/// What follows the first `close` in `body` (a markup after its opening).
+fn past<'t>(body: &'t str, close: &str) -> Result<&'t str, Malformed> {
+    body.split_once(close)
+        .map(|(_, after)| after)
         .ok_or(Malformed)
 }
 
-/// The name at the start of `text`.
-fn name_at(text: &str) -> Result<&str, Malformed> {
+/// The name at the start of `text`, and the text after it.
+fn name_at(text: &str) -> Result<(&str, &str), Malformed> {
     let end = text.find(|c: char| !is_name_char(c)).unwrap_or(text.len());
-    let name = &text[..end];
+    let (name, rest) = text.split_at_checked(end).ok_or(Malformed)?;
     match name.chars().next() {
-        Some(first) if is_name_start(first) => Ok(name),
+        Some(first) if is_name_start(first) => Ok((name, rest)),
         _ => Err(Malformed),
     }
 }
@@ -260,17 +253,18 @@ fn check_text(text: &str, inside: bool) -> Result<(), Malformed> {
 fn check_references(text: &str) -> Result<(), Malformed> {
     let mut rest = text;
     while let Some(at) = rest.find('&') {
-        let (_, len) = reference(&rest[at..]).ok_or(Malformed)?;
-        rest = &rest[at + len..];
+        let (_, after) = rest.get(at..).and_then(reference).ok_or(Malformed)?;
+        rest = after;
     }
     Ok(())
 }
 
 /// The reference at the start of `text` (which starts with `&`): the character it stands for
-/// and the reference's length.
-fn reference(text: &str) -> Option<(char, usize)> {
+/// and the text after the reference.
+fn reference(text: &str) -> Option<(char, &str)> {
     let end = text.bytes().take(MAX_REFERENCE).position(|b| b == b';')?;
-    let c = match &text[1..end] {
+    let (written, after) = text.split_at_checked(end + 1)?;
+    let c = match written.strip_prefix('&')?.strip_suffix(';')? {
         "quot" => '"',
         "apos" => '\'',
         "lt" => '<',
@@ -291,7 +285,7 @@ fn reference(text: &str) -> Option<(char, usize)> {
             c
         }
     };
-    Some((c, end + 1))
+    Some((c, after))
 }
 
 /// XML 1.0 `Char` (surrogates cannot be a `char`).
@@ -307,28 +301,31 @@ fn decode(raw: &str) -> Cow<'_, str> {
     }
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
-    while let Some(at) = rest.find(SPECIAL) {
-        out.push_str(&rest[..at]);
-        let tail = &rest[at..];
-        rest = match tail.as_bytes()[0] {
-            b'&' => {
-                if let Some((c, len)) = reference(tail) {
+    // `find` stops where a character starts, so the split always succeeds.
+    while let Some((text, tail)) = rest.find(SPECIAL).and_then(|at| rest.split_at_checked(at)) {
+        out.push_str(text);
+        let mut chars = tail.chars();
+        let special = chars.next();
+        let after = chars.as_str();
+        rest = match special {
+            Some('&') => {
+                if let Some((c, after_reference)) = reference(tail) {
                     out.push(c);
-                    &tail[len..]
+                    after_reference
                 } else {
                     // Not reached: `parse` checked every reference.
                     out.push('&');
-                    &tail[1..]
+                    after
                 }
             }
             // A line break is one space, CR LF included.
-            b'\r' if tail[1..].starts_with('\n') => {
+            Some('\r') => {
                 out.push(' ');
-                &tail[2..]
+                after.strip_prefix('\n').unwrap_or(after)
             }
             _ => {
                 out.push(' ');
-                &tail[1..]
+                after
             }
         };
     }

@@ -42,6 +42,10 @@ pub mod keys {
     pub fn generate_private() -> zeroize::Zeroizing<[u8; 32]> {
         use rand::TryRng;
         let mut key = zeroize::Zeroizing::new([0u8; 32]);
+        #[expect(
+            clippy::expect_used,
+            reason = "a key cannot be made without the OS CSPRNG; getrandom (Linux, falling back to /dev/urandom) and getentropy (macOS) do not fail on a running system, and the panic is the documented contract (# Panics)"
+        )]
         rand::rngs::SysRng
             .try_fill_bytes(key.as_mut())
             .expect("operating system random number generator unavailable");

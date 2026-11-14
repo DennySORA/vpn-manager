@@ -14,16 +14,16 @@
 //!
 //! Nothing needs root or changes the host. A run that fails half-way still ends what it started.
 
-#![allow(unsafe_code, reason = "libc kill FFI to stop the manager under test")]
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
+#![cfg(test)]
+#![cfg_attr(
+    target_os = "linux",
+    expect(unsafe_code, reason = "libc kill FFI to stop the manager under test")
 )]
 #![cfg(target_os = "linux")]
 
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -323,7 +323,7 @@ async fn configure(paths: &Paths, lab: &LabPeer, listed: Ipv4Addr) -> InstanceId
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();
@@ -576,8 +576,11 @@ async fn comes_in(lab: &vpn_tunnel::Netstack, from: Ipv4Addr, to: SocketAddr, ex
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_new_builtin_list_guards_the_forwards_live() {
+    // 0700 whatever the umask: the echo App's executable is copied in here, and an executable
+    // in a folder others can write to is refused.
     let tmp = tempfile::Builder::new()
         .prefix("vpnm-bl-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()
         .unwrap();
     let dir = tmp.path().to_path_buf();

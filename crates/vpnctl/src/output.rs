@@ -1,5 +1,7 @@
 //! What `vpnctl` prints: the API's JSON with `--json`, otherwise short Traditional Chinese text
-//! with aligned columns (CJK characters are two columns wide in a terminal).
+//! with aligned columns (CJK characters are two columns wide in a terminal). Every write to the
+//! terminal goes through this module: results on stdout, failures, progress and prompts on
+//! stderr.
 
 use serde::Serialize;
 use vpn_domain::{
@@ -18,8 +20,8 @@ impl Out {
     pub fn json<T: Serialize + ?Sized>(self, value: &T) {
         if self.json {
             match serde_json::to_string_pretty(value) {
-                Ok(s) => println!("{s}"),
-                Err(e) => eprintln!("vpnctl: 無法輸出 JSON：{e}"),
+                Ok(s) => stdout_line(&s),
+                Err(e) => stderr_line(&format!("vpnctl: 無法輸出 JSON：{e}")),
             }
         }
     }
@@ -27,9 +29,37 @@ impl Out {
     /// Print a line of human output (not in `--json` mode).
     pub fn line(self, text: impl AsRef<str>) {
         if !self.json {
-            println!("{}", text.as_ref());
+            stdout_line(text.as_ref());
         }
     }
+}
+
+/// One line of a command's result on stdout.
+#[expect(
+    clippy::print_stdout,
+    reason = "vpnctl's results go to stdout, and only through this function"
+)]
+fn stdout_line(text: &str) {
+    println!("{text}");
+}
+
+/// One line on stderr, apart from the result on stdout: a failure, or progress before a slow
+/// step.
+#[expect(
+    clippy::print_stderr,
+    reason = "vpnctl's failures and progress go to stderr, and only through this function"
+)]
+pub fn stderr_line(text: &str) {
+    eprintln!("{text}");
+}
+
+/// A prompt on stderr, without a line break: what is typed follows it on the same line.
+#[expect(
+    clippy::print_stderr,
+    reason = "vpnctl's prompts go to stderr (stdout carries the result), and only through this function"
+)]
+pub fn stderr_prompt(text: &str) {
+    eprint!("{text}");
 }
 
 /// Columns a character takes in a terminal: East Asian wide and fullwidth forms take two.

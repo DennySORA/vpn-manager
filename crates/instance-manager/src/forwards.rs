@@ -30,7 +30,7 @@ use vpn_domain::{
 };
 use vpn_platform::apps::proc::Holder;
 
-use crate::apps::{TargetView, TreeSockets};
+use crate::apps::TargetView;
 
 /// A socket list older than this no longer verifies anything (the watcher passes every 2 s).
 pub const STALE_SCAN: Duration = Duration::from_secs(10);
@@ -265,7 +265,7 @@ pub fn verify(f: &Facts<'_>) -> Result<Verified, NotReady> {
             ),
         ));
     }
-    let Some(TreeSockets { tcp, udp, pids, at }) = sockets.as_ref() else {
+    let Some(found) = sockets.as_ref() else {
         return Err(not_ready(
             ForwardState::TargetMissing,
             "APP_NOT_CHECKED",
@@ -276,6 +276,7 @@ pub fn verify(f: &Facts<'_>) -> Result<Verified, NotReady> {
             ),
         ));
     };
+    let (tcp, udp, pids, at) = (&found.tcp, &found.udp, &found.pids, &found.at);
     if f.now.saturating_duration_since(*at) > STALE_SCAN {
         let secs = STALE_SCAN.as_secs();
         return Err(not_ready(
@@ -777,6 +778,7 @@ impl Evidence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::TreeSockets;
     use vpn_domain::{
         AppId, AppLimits, AppRunState, AssignmentSource, EntityMeta, ForwardBindingId, InstanceId,
     };
@@ -851,6 +853,7 @@ mod tests {
                 tcp: parse(tcp),
                 udp: parse(udp),
                 pids: vec![4242],
+                ports: Vec::new(),
                 at: Instant::now().checked_sub(age).unwrap(),
             }),
         }

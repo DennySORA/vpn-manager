@@ -10,7 +10,7 @@
 //!
 //! All mounts are private to the sandbox (propagation is cut first), so the host sees nothing,
 //! and they vanish with the namespace.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the sandbox's mount(2) syscalls"
 )]

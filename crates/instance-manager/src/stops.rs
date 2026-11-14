@@ -315,7 +315,7 @@ mod tests {
         let epoch = hold.stop(false);
         stops.sync(id, &hold).unwrap();
         let path = stops.path(id);
-        let meta = std::fs::metadata(&path).unwrap();
+        let meta = fs::metadata(&path).unwrap();
         assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         assert_eq!(stops.scan().unwrap(), [(id, Some(false))]);
         // An emergency on top: the marker says so.
@@ -343,15 +343,15 @@ mod tests {
             InstanceId::new(),
             InstanceId::new(),
         );
-        std::fs::write(stops.tmp(torn), b"{\"format\":1,\"instance_").unwrap();
-        std::fs::write(stops.path(garbage), b"\x00\x01").unwrap();
+        fs::write(stops.tmp(torn), b"{\"format\":1,\"instance_").unwrap();
+        fs::write(stops.path(garbage), b"\x00\x01").unwrap();
         // A marker whose content names another Instance than its file name: not trusted.
         let hold = Hold::default();
         hold.stop(false);
         stops.sync(other, &hold).unwrap();
-        std::fs::rename(stops.path(other), stops.path(moved)).unwrap();
+        fs::rename(stops.path(other), stops.path(moved)).unwrap();
         // Not a marker at all.
-        std::fs::write(dir.path().join(DIR).join("notes.txt"), b"x").unwrap();
+        fs::write(dir.path().join(DIR).join("notes.txt"), b"x").unwrap();
         let mut found = stops.scan().unwrap();
         found.sort();
         let mut want = vec![(torn, None), (garbage, None), (moved, None)];

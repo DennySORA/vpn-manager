@@ -28,19 +28,43 @@ DEV_ORIGIN=""
 LAB_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --base) BASE=$2; shift 2 ;;
-    --state) STATE=$2; shift 2 ;;
-    --seed) SEED=1; shift ;;
-    --release) PROFILE_DIR=release; shift ;;
-    --dev-origin) DEV_ORIGIN=$2; shift 2 ;;
-    --lab-forward) LAB_ARGS+=(--forward-tcp "$2"); shift 2 ;;
-    *) echo "unknown option: $1" >&2; exit 2 ;;
+    --base)
+      BASE=$2
+      shift 2
+      ;;
+    --state)
+      STATE=$2
+      shift 2
+      ;;
+    --seed)
+      SEED=1
+      shift
+      ;;
+    --release)
+      PROFILE_DIR=release
+      shift
+      ;;
+    --dev-origin)
+      DEV_ORIGIN=$2
+      shift 2
+      ;;
+    --lab-forward)
+      LAB_ARGS+=(--forward-tcp "$2")
+      shift 2
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      exit 2
+      ;;
   esac
 done
 STATE=${STATE:-${TMPDIR:-/tmp}/vpnm-dev-${BASE}}
 BIN=${ROOT}/target/${PROFILE_DIR}
 for b in vpnd vpn-labpeer; do
-  [[ -x "${BIN}/${b}" ]] || { echo "missing ${BIN}/${b}: run cargo build${PROFILE_DIR/debug/} first" >&2; exit 1; }
+  [[ -x "${BIN}/${b}" ]] || {
+    echo "missing ${BIN}/${b}: run cargo build${PROFILE_DIR/debug/} first" >&2
+    exit 1
+  }
 done
 
 API=http://127.0.0.1:${BASE}
@@ -51,18 +75,33 @@ FRESH=0
 [[ -d "${STATE}/state" ]] || FRESH=1
 
 pids=()
+# `${a[@]+"${a[@]}"}` expands an empty array to nothing: macOS's bash 3.2 treats a plain
+# "${a[@]}" of an empty array as unset under `set -u`.
 stop() {
-  for p in "${pids[@]}"; do kill -TERM "${p}" 2>/dev/null || true; done
+  for p in ${pids[@]+"${pids[@]}"}; do kill -TERM "${p}" 2>/dev/null || true; done
   wait 2>/dev/null || true
 }
 trap stop EXIT INT TERM
 
 "${BIN}/vpn-labpeer" serve --listen "${LAB}" --client-config "${STATE}/lab.conf" --keys "${STATE}/lab.keys" \
-  --api "127.0.0.1:$((BASE + 2))" "${LAB_ARGS[@]}" 2>"${STATE}/lab.log" &
+  --api "127.0.0.1:$((BASE + 2))" ${LAB_ARGS[@]+"${LAB_ARGS[@]}"} 2>"${STATE}/lab.log" &
 pids+=($!)
+# The seed imports the client configuration the peer writes when it starts; the manager and the
+# controller can be ready before it is there.
+for _ in $(seq 1 100); do
+  [[ -s "${STATE}/lab.conf" ]] && break
+  sleep 0.1
+done
+[[ -s "${STATE}/lab.conf" ]] || {
+  echo "vpn-labpeer did not start (see ${STATE}/lab.log)" >&2
+  exit 1
+}
 "${BIN}/vpnd" manager --state-dir "${STATE}/state" --ssh-dir "${STATE}/home/.ssh" 2>"${STATE}/mgr.log" &
 pids+=($!)
-for _ in $(seq 1 50); do [[ -S "${STATE}/state/run/manager.sock" ]] && break; sleep 0.1; done
+for _ in $(seq 1 50); do
+  [[ -S "${STATE}/state/run/manager.sock" ]] && break
+  sleep 0.1
+done
 ctl=("${BIN}/vpnd" controller --port "${BASE}" --state-dir "${STATE}/state")
 [[ -n "${DEV_ORIGIN}" ]] && ctl+=(--dev-origin "${DEV_ORIGIN}")
 "${ctl[@]}" 2>"${STATE}/ctl.log" &

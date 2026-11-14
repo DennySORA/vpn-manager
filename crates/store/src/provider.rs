@@ -42,7 +42,7 @@ pub fn read(c: &Connection) -> Result<ProviderEgress, StoreError> {
         selected_instance_id: selected
             .map(|s| {
                 s.parse()
-                    .map_err(|_| StoreError::Corrupt("provider egress instance".into()))
+                    .map_err(|e| StoreError::Corrupt(format!("provider egress instance: {e}")))
             })
             .transpose()?,
     })

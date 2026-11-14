@@ -4,10 +4,7 @@
 //! that go into the vault and never come back, and a job that waits — connecting nowhere — while
 //! its connection is stopped. Nothing reaches a network: the only Instance never runs.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -116,7 +113,7 @@ async fn fixture() -> Fixture {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();

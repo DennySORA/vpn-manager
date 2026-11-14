@@ -166,6 +166,16 @@ pub struct Promoter {
     seal_retry: Option<SealRetry>,
 }
 
+impl std::fmt::Debug for Promoter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Promoter")
+            .field("last_check", &self.last_check)
+            .field("last_failure", &self.last_failure)
+            .field("seal_retry", &self.seal_retry.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 struct SealRetry {
     run: String,
     next: Instant,

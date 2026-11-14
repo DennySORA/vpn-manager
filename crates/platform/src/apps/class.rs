@@ -453,7 +453,7 @@ mod tests {
         assert_eq!(found.map(|p| p.pid), Some(pid));
         let tree = Tree::from([(pid, table[&pid].started_us)]);
         assert_eq!(same_program_elsewhere(&table, &tree, &program, None), None);
-        let _ = child.kill();
-        let _ = child.wait();
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }

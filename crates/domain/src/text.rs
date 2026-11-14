@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(text.en, "3 items: busy");
         assert_eq!(text.zh_tw, "3 項：忙碌");
         assert_eq!(text.ja, "3 件：使用中");
-        assert_eq!(std::mem::size_of::<Text>(), std::mem::size_of::<usize>());
+        assert_eq!(size_of::<Text>(), size_of::<usize>());
         assert_eq!(
             Language::of_accept_language(["fr-FR, ja;q=0.8"]),
             Language::Japanese

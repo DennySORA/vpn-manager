@@ -10,7 +10,7 @@
 //!
 //! The shortage is not left to chance either: [`fix_buffers`] bounds what one loopback
 //! connection can hold of the host's network memory.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "the ENOBUFS-aware socket buffer sizing calls getsockopt/setsockopt via libc"
 )]
@@ -64,20 +64,21 @@ pub const LOOPBACK_BUFFER: u32 = 128 * 1024;
 /// Fails with the OS error when `setsockopt` refuses either buffer size.
 pub fn fix_buffers(socket: &impl AsRawFd, bytes: u32) -> io::Result<()> {
     let value = libc::c_int::try_from(bytes).unwrap_or(libc::c_int::MAX);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "size_of::<c_int>() is 4, which socklen_t holds"
+    )]
+    let len = size_of::<libc::c_int>() as libc::socklen_t;
     for option in [libc::SO_RCVBUF, libc::SO_SNDBUF] {
-        // SAFETY: `setsockopt` reads `size_of::<c_int>()` bytes from `value`, which lives across
-        // the call; the descriptor is borrowed from a live socket.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "size_of::<c_int>() is 4, which socklen_t holds"
-        )]
+        // SAFETY: `setsockopt` reads `len` bytes from `value`, which lives across the call; the
+        // descriptor is borrowed from a live socket.
         let rc = unsafe {
             libc::setsockopt(
                 socket.as_raw_fd(),
                 libc::SOL_SOCKET,
                 option,
                 (&raw const value).cast(),
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                len,
             )
         };
         if rc != 0 {
@@ -121,7 +122,7 @@ fn note_wait() {
 }
 
 /// The waits of one direction of a socket.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Backoff {
     sleep: Option<Pin<Box<Sleep>>>,
     wait: Duration,
@@ -181,6 +182,7 @@ impl Backoff {
 
 /// A host socket, or one half of it, whose reads and writes wait out `ENOBUFS` (see the module
 /// documentation).
+#[derive(Debug)]
 pub struct Patient<T> {
     inner: T,
     read: Backoff,

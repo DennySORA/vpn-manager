@@ -5,7 +5,7 @@
 //! installation key (`gateway.key`) stay with the data they protect: backed up, moved and removed
 //! together with it. Whoever can read this user's files can read the keys; the store refuses a key
 //! that does not match it.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "the key file store compares file ownership against getuid(2)"
 )]
@@ -84,11 +84,8 @@ pub fn read_key_file(path: &Path) -> Result<Zeroizing<[u8; 32]>, KeyFileError> {
         })?;
     let m = f.metadata().map_err(KeyFileError::Io)?;
     // SAFETY: getuid has no preconditions.
-    if !m.is_file()
-        || m.uid() != unsafe { libc::getuid() }
-        || m.mode() & 0o077 != 0
-        || m.len() != 32
-    {
+    let uid = unsafe { libc::getuid() };
+    if !m.is_file() || m.uid() != uid || m.mode() & 0o077 != 0 || m.len() != 32 {
         return Err(KeyFileError::Unsafe);
     }
     let mut key = Zeroizing::new([0u8; 32]);

@@ -84,20 +84,12 @@ const fn severity(s: Severity) -> &'static str {
 fn print_result(ctx: &Ctx, r: &ImportResult) {
     if let Some(c) = &r.candidate {
         ctx.out.line(format!("公鑰：{}", c.public_key));
-        let addresses: Vec<String> = c
-            .addresses
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
+        let addresses: Vec<String> = c.addresses.iter().map(ToString::to_string).collect();
         ctx.out.line(format!("位址：{}", addresses.join(", ")));
         ctx.out.line(format!("端點：{}", c.endpoint));
-        let allowed: Vec<String> = c
-            .allowed_ips
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
+        let allowed: Vec<String> = c.allowed_ips.iter().map(ToString::to_string).collect();
         ctx.out.line(format!("AllowedIPs：{}", allowed.join(", ")));
-        let dns: Vec<String> = c.dns.iter().map(std::string::ToString::to_string).collect();
+        let dns: Vec<String> = c.dns.iter().map(ToString::to_string).collect();
         ctx.out.line(format!(
             "DNS：{}",
             if dns.is_empty() {

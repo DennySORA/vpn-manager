@@ -287,7 +287,7 @@ pub async fn delete(
                 expected_revision: rev,
             })
             .await?;
-            let _ = link.call(Call::DeleteSecret(a.credential_ref)).await;
+            link.discard_secret(a.credential_ref).await;
             providers.forget(id);
             Ok((vec![id.to_string()], ()))
         },

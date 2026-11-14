@@ -3,7 +3,7 @@
 //! kernel attaches it when the receiving socket has `SO_PASSCRED`, translated into the
 //! receiver's pid namespace — that is how the manager learns host pids of processes inside the
 //! sandbox's pid namespace).
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns SCM_RIGHTS fd passing over SOCK_SEQPACKET via socketpair/sendmsg/recvmsg"
 )]
@@ -42,25 +42,21 @@ pub fn seqpacket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
     if r < 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: both descriptors are fresh and owned by nobody else.
-    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+    // SAFETY: socketpair succeeded: the first descriptor is fresh and owned by nobody else.
+    let first = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: the same for the second.
+    let second = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+    Ok((first, second))
 }
 
 pub fn set_int_option(fd: RawFd, level: i32, name: i32, value: i32) -> io::Result<()> {
-    // SAFETY: pointer to a live c_int of the size we pass.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "size_of::<i32>() is 4, which socklen_t holds"
     )]
-    let r = unsafe {
-        libc::setsockopt(
-            fd,
-            level,
-            name,
-            (&raw const value).cast(),
-            std::mem::size_of::<i32>() as libc::socklen_t,
-        )
-    };
+    let len = size_of::<i32>() as libc::socklen_t;
+    // SAFETY: pointer to a live c_int of the size we pass.
+    let r = unsafe { libc::setsockopt(fd, level, name, (&raw const value).cast(), len) };
     if r < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -78,18 +74,19 @@ pub fn set_receive_timeout(fd: RawFd, timeout: std::time::Duration) -> io::Resul
         tv_sec: timeout.as_secs() as libc::time_t,
         tv_usec: libc::suseconds_t::from(timeout.subsec_micros().cast_signed()),
     };
-    // SAFETY: pointer to a live timeval of the size we pass.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "size_of::<timeval>() is 16, which socklen_t holds"
     )]
+    let len = size_of::<libc::timeval>() as libc::socklen_t;
+    // SAFETY: pointer to a live timeval of the size we pass.
     let r = unsafe {
         libc::setsockopt(
             fd,
             libc::SOL_SOCKET,
             libc::SO_RCVTIMEO,
             (&raw const tv).cast(),
-            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            len,
         )
     };
     if r < 0 {
@@ -111,8 +108,8 @@ pub fn send(fd: RawFd, data: &[u8], fds: &[RawFd]) -> io::Result<()> {
         iov_len: data.len(),
     };
     // At most MAX_FDS descriptors (checked above): their bytes fit u32.
-    let fd_bytes = u32::try_from(std::mem::size_of_val(fds))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "message too large"))?;
+    let fd_bytes = u32::try_from(size_of_val(fds))
+        .map_err(|_too_large| io::Error::new(io::ErrorKind::InvalidInput, "message too large"))?;
     // SAFETY: CMSG_SPACE is a pure size computation.
     let space = unsafe { libc::CMSG_SPACE(fd_bytes) } as usize;
     let mut control = vec![0u8; if fds.is_empty() { 0 } else { space }];
@@ -123,18 +120,20 @@ pub fn send(fd: RawFd, data: &[u8], fds: &[RawFd]) -> io::Result<()> {
     if !fds.is_empty() {
         msg.msg_control = control.as_mut_ptr().cast();
         msg.msg_controllen = control.len() as _;
-        // SAFETY: the control buffer has room for one header with `fds.len()` descriptors.
-        unsafe {
-            let cmsg = libc::CMSG_FIRSTHDR(&raw const msg);
-            (*cmsg).cmsg_level = libc::SOL_SOCKET;
-            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len = libc::CMSG_LEN(fd_bytes) as _;
-            std::ptr::copy_nonoverlapping(
-                fds.as_ptr(),
-                libc::CMSG_DATA(cmsg).cast::<RawFd>(),
-                fds.len(),
-            );
-        }
+        // SAFETY: CMSG_LEN is a pure size computation.
+        let cmsg_len = unsafe { libc::CMSG_LEN(fd_bytes) };
+        // SAFETY: CMSG_FIRSTHDR reads the control fields of `msg`, a live header whose control
+        // buffer has room for one header with `fds.len()` descriptors.
+        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&raw const msg) };
+        // SAFETY: that room makes `cmsg` the start of the control buffer, a header we fill.
+        let header = unsafe { &mut *cmsg };
+        header.cmsg_level = libc::SOL_SOCKET;
+        header.cmsg_type = libc::SCM_RIGHTS;
+        header.cmsg_len = cmsg_len as _;
+        // SAFETY: CMSG_DATA only computes where the header's payload starts.
+        let data = unsafe { libc::CMSG_DATA(cmsg) };
+        // SAFETY: the payload has room for `fds.len()` descriptors (CMSG_SPACE above).
+        unsafe { std::ptr::copy_nonoverlapping(fds.as_ptr(), data.cast::<RawFd>(), fds.len()) };
     }
     loop {
         // SAFETY: msg points at live buffers for the duration of the call.
@@ -156,15 +155,19 @@ pub fn recv(fd: RawFd) -> io::Result<Option<Received>> {
         iov_base: data.as_mut_ptr().cast(),
         iov_len: data.len(),
     };
-    // SAFETY: pure size computations.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "MAX_FDS descriptors and one ucred are a few hundred bytes"
     )]
-    let space = unsafe {
-        libc::CMSG_SPACE((MAX_FDS * std::mem::size_of::<RawFd>()) as u32)
-            + libc::CMSG_SPACE(std::mem::size_of::<libc::ucred>() as u32)
-    } as usize;
+    let (fd_bytes, cred_bytes) = (
+        (MAX_FDS * size_of::<RawFd>()) as u32,
+        size_of::<libc::ucred>() as u32,
+    );
+    // SAFETY: CMSG_SPACE is a pure size computation.
+    let fd_space = unsafe { libc::CMSG_SPACE(fd_bytes) };
+    // SAFETY: the same.
+    let cred_space = unsafe { libc::CMSG_SPACE(cred_bytes) };
+    let space = (fd_space + cred_space) as usize;
     let mut control = vec![0u8; space];
     // SAFETY: zeroed msghdr is a valid empty header; we fill the fields below.
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
@@ -185,33 +188,45 @@ pub fn recv(fd: RawFd) -> io::Result<Option<Received>> {
     };
     let mut fds = Vec::new();
     let mut creds = None;
-    // SAFETY: the kernel filled `control` with well-formed headers up to msg_controllen; we
-    // walk them with the CMSG macros and copy the payloads out unaligned.
-    unsafe {
-        let mut cmsg = libc::CMSG_FIRSTHDR(&raw const msg);
-        while !cmsg.is_null() {
-            let header = &*cmsg;
-            let payload = header.cmsg_len as usize - libc::CMSG_LEN(0) as usize;
-            if header.cmsg_level == libc::SOL_SOCKET && header.cmsg_type == libc::SCM_RIGHTS {
-                let count = payload / std::mem::size_of::<RawFd>();
-                #[expect(
-                    clippy::cast_ptr_alignment,
-                    reason = "the descriptors are read with read_unaligned"
-                )]
-                let base = libc::CMSG_DATA(cmsg) as *const RawFd;
-                for i in 0..count {
-                    fds.push(OwnedFd::from_raw_fd(std::ptr::read_unaligned(base.add(i))));
-                }
-            } else if header.cmsg_level == libc::SOL_SOCKET
-                && header.cmsg_type == libc::SCM_CREDENTIALS
-                && payload >= std::mem::size_of::<libc::ucred>()
-            {
-                creds = Some(std::ptr::read_unaligned(
-                    libc::CMSG_DATA(cmsg) as *const libc::ucred
-                ));
+    // The kernel filled `control` with well-formed headers up to msg_controllen; they are walked
+    // with the CMSG macros and their payloads copied out unaligned.
+    // SAFETY: CMSG_LEN is a pure size computation.
+    let header_len = unsafe { libc::CMSG_LEN(0) } as usize;
+    // SAFETY: CMSG_FIRSTHDR reads the control fields of `msg`, which recvmsg filled in.
+    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&raw const msg) };
+    while !cmsg.is_null() {
+        // SAFETY: a non-null header the CMSG macros found inside `control`.
+        let header = unsafe { &*cmsg };
+        let payload = header.cmsg_len as usize - header_len;
+        if header.cmsg_level == libc::SOL_SOCKET && header.cmsg_type == libc::SCM_RIGHTS {
+            let count = payload / size_of::<RawFd>();
+            // SAFETY: CMSG_DATA only computes where this header's payload starts.
+            let data = unsafe { libc::CMSG_DATA(cmsg) };
+            #[expect(
+                clippy::cast_ptr_alignment,
+                reason = "the descriptors are read with read_unaligned"
+            )]
+            let base = data as *const RawFd;
+            for i in 0..count {
+                // SAFETY: descriptor `i` of `count` lies inside this header's payload.
+                let at = unsafe { base.add(i) };
+                // SAFETY: `at` points at a descriptor number the kernel wrote, maybe unaligned.
+                let raw = unsafe { std::ptr::read_unaligned(at) };
+                // SAFETY: the kernel installed this descriptor for us (`SCM_RIGHTS`); nothing
+                // else owns it.
+                fds.push(unsafe { OwnedFd::from_raw_fd(raw) });
             }
-            cmsg = libc::CMSG_NXTHDR(&raw const msg, cmsg);
+        } else if header.cmsg_level == libc::SOL_SOCKET
+            && header.cmsg_type == libc::SCM_CREDENTIALS
+            && payload >= size_of::<libc::ucred>()
+        {
+            // SAFETY: CMSG_DATA only computes where this header's payload starts.
+            let data = unsafe { libc::CMSG_DATA(cmsg) };
+            // SAFETY: the payload holds a whole ucred (checked above), maybe unaligned.
+            creds = Some(unsafe { std::ptr::read_unaligned(data as *const libc::ucred) });
         }
+        // SAFETY: CMSG_NXTHDR reads `msg` and the current header: the next header, or null.
+        cmsg = unsafe { libc::CMSG_NXTHDR(&raw const msg, cmsg) };
     }
     if msg.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0 {
         // Received descriptors are closed when `fds` drops.

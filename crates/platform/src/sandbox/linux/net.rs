@@ -2,7 +2,7 @@
 //! `lo` up, the TUN device with its address(es) and MTU, and default routes through it for the
 //! address families the profile has. A family without an address gets no route at all, so the
 //! kernel refuses it (`ENETUNREACH`) instead of finding another way.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the sandbox's network setup: sockets, ioctl and interface lookups via libc"
 )]
@@ -100,26 +100,30 @@ pub fn tun_name(fd: std::os::fd::RawFd) -> io::Result<String> {
 
 /// Names of the network interfaces of this process's network namespace.
 pub fn interfaces() -> io::Result<Vec<String>> {
-    // SAFETY: if_nameindex returns a heap array terminated by a zero entry (or null on
-    // failure); we only read it and hand it back to if_freenameindex.
-    unsafe {
-        let list = libc::if_nameindex();
-        if list.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let mut names = Vec::new();
-        let mut entry = list;
-        while (*entry).if_index != 0 && !(*entry).if_name.is_null() {
-            names.push(
-                std::ffi::CStr::from_ptr((*entry).if_name)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-            entry = entry.add(1);
-        }
-        libc::if_freenameindex(list);
-        Ok(names)
+    // if_nameindex returns a heap array terminated by a zero entry (or null on failure); it is
+    // only read, and handed back to if_freenameindex.
+    // SAFETY: if_nameindex has no preconditions.
+    let list = unsafe { libc::if_nameindex() };
+    if list.is_null() {
+        return Err(io::Error::last_os_error());
     }
+    let mut names = Vec::new();
+    let mut entry = list;
+    loop {
+        // SAFETY: `entry` is in the array: the walk ends at its terminating zero entry.
+        let current = unsafe { &*entry };
+        if current.if_index == 0 || current.if_name.is_null() {
+            break;
+        }
+        // SAFETY: the name of an entry before the terminator is a NUL-terminated string.
+        let name = unsafe { std::ffi::CStr::from_ptr(current.if_name) };
+        names.push(name.to_string_lossy().into_owned());
+        // SAFETY: this entry was not the terminator, so the next one is still in the array.
+        entry = unsafe { entry.add(1) };
+    }
+    // SAFETY: the array if_nameindex returned, handed back once.
+    unsafe { libc::if_freenameindex(list) };
+    Ok(names)
 }
 
 pub fn if_index(name: &str) -> io::Result<u32> {
@@ -176,18 +180,13 @@ impl Netlink {
         {
             addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
         }
-        // SAFETY: bind with a pointer to a live sockaddr_nl of the size we pass.
         #[expect(
             clippy::cast_possible_truncation,
             reason = "size_of::<sockaddr_nl>() is 12, which socklen_t holds"
         )]
-        let r = unsafe {
-            libc::bind(
-                fd.as_raw_fd(),
-                (&raw const addr).cast(),
-                std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
-            )
-        };
+        let len = size_of::<libc::sockaddr_nl>() as libc::socklen_t;
+        // SAFETY: bind with a pointer to a live sockaddr_nl of the size we pass.
+        let r = unsafe { libc::bind(fd.as_raw_fd(), (&raw const addr).cast(), len) };
         if r < 0 {
             return Err(io::Error::last_os_error());
         }

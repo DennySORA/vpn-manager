@@ -12,13 +12,12 @@
 // A `pub` item of a program that nothing uses is dead code all the same (off by default).
 #![deny(dead_code_pub_in_binary)]
 
-/// Progress for the user. Writing it may fail (a closed pipe or terminal); the steps it describes
-/// must still finish, so the error is ignored instead of panicking like `println!`.
+/// Progress for the user, one line on stdout ([`output::say`]: a failed write does not stop the
+/// steps it describes).
 macro_rules! say {
-    ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        let _ = writeln!(std::io::stdout(), $($arg)*);
-    }};
+    ($($arg:tt)*) => {
+        $crate::output::say(format_args!($($arg)*))
+    };
 }
 
 mod fsx;
@@ -27,6 +26,7 @@ mod launchd;
 mod layout;
 mod notices;
 mod ops;
+mod output;
 mod payload;
 mod record;
 mod scrub;
@@ -129,7 +129,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(e) => {
-            eprintln!("vpn-installer：{e:#}");
+            output::error(format_args!("vpn-installer：{e:#}"));
             ExitCode::FAILURE
         }
     }

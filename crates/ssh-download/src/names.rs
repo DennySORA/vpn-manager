@@ -94,17 +94,11 @@ fn split_extension(name: &str) -> (&str, Option<&str>) {
 
 /// `value` cut to at most `max` bytes, at a character boundary.
 fn truncate_utf8(value: &str, max: usize) -> &str {
-    if value.len() <= max {
-        return value;
-    }
-    let mut end = 0;
-    for (i, _) in value.char_indices() {
-        if i > max {
-            break;
-        }
-        end = i;
-    }
-    &value[..end]
+    // A character boundary at or below `max` (all of `value` when it fits), so `get` always has
+    // the prefix.
+    value
+        .get(..value.floor_char_boundary(max))
+        .unwrap_or_default()
 }
 
 /// `original` as a local name of at most `max_bytes`.

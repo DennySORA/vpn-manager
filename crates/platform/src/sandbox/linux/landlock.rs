@@ -10,7 +10,7 @@
 //! descriptors already open (the App's log). Without Landlock in the kernel, or with one older
 //! than ABI 3 (which cannot refuse truncation: a file anywhere the user may write could still
 //! be emptied), nothing is applied: the start fails, it never runs unconfined or half confined.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "landlock_create_ruleset, landlock_add_rule and landlock_restrict_self via libc::syscall"
 )]
@@ -145,15 +145,15 @@ pub fn ruleset(writable: &[&Path]) -> io::Result<OwnedFd> {
         libc::syscall(
             libc::SYS_landlock_create_ruleset,
             &raw const attr,
-            std::mem::size_of::<RulesetAttr>(),
+            size_of::<RulesetAttr>(),
             0 as libc::c_uint,
         )
     };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
-    let raw =
-        RawFd::try_from(fd).map_err(|_| io::Error::other("ruleset descriptor out of range"))?;
+    let raw = RawFd::try_from(fd)
+        .map_err(|_out_of_range| io::Error::other("ruleset descriptor out of range"))?;
     // SAFETY: a new descriptor we own (the kernel sets close-on-exec on it).
     let ruleset = unsafe { OwnedFd::from_raw_fd(raw) };
     for dir in writable {
@@ -189,7 +189,7 @@ pub fn ruleset(writable: &[&Path]) -> io::Result<OwnedFd> {
 
 /// `dir` opened as a path only, refusing anything but a directory.
 fn open_dir(dir: &Path) -> io::Result<OwnedFd> {
-    let path = CString::new(dir.as_os_str().as_bytes()).map_err(|_| {
+    let path = CString::new(dir.as_os_str().as_bytes()).map_err(|_nul| {
         tr!(
             "The path contains NUL",
             "路徑含 NUL",

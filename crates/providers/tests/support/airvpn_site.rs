@@ -13,11 +13,8 @@
 //! garbled or refusing answer to a reservation, a setting refused, ignored or answered with a
 //! page, a test refused, garbled or never answered.
 
-#![allow(dead_code, reason = "each test binary uses a different part")]
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
+#![expect(dead_code, reason = "each test binary uses a different part")]
 
 use std::collections::HashMap;
 use std::sync::Mutex;

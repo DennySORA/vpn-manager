@@ -2,8 +2,6 @@
 //! a reconcile cleans only what is provably ours and stale — exactly the items just shown, after
 //! `--yes`.
 
-use std::fmt::Write as _;
-
 use clap::Subcommand;
 use hyper::Method;
 use vpn_domain::{ReconcileInput, ReconcileOutcome, ReconcileResult, RecoveryItem, RecoveryReport};
@@ -126,17 +124,16 @@ async fn reconcile(ctx: &Ctx, yes: bool) -> CmdResult {
         return Ok(Exit::Ok);
     }
     if !yes {
-        let mut text = format!("會清理這 {} 個項目：", cleanable.len());
-        for i in &cleanable {
-            let _ = write!(
-                text,
-                "\n  {}：{}",
+        let mut lines = vec![format!("會清理這 {} 個項目：", cleanable.len())];
+        lines.extend(cleanable.iter().map(|i| {
+            format!(
+                "  {}：{}",
                 i.title.zh_tw,
                 i.action.as_ref().map_or("清理", |t| t.zh_tw.as_str())
-            );
-        }
-        text.push_str("\n確定要清理，請加上 --yes");
-        return Err(Failure::Usage(text));
+            )
+        }));
+        lines.push("確定要清理，請加上 --yes".into());
+        return Err(Failure::Usage(lines.join("\n")));
     }
     let input = ReconcileInput {
         items: Some(cleanable.iter().map(|i| i.id.clone()).collect()),

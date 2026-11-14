@@ -2,10 +2,7 @@
 //! stale record names (other start time), one recorded with another program, one of our own
 //! live workers, a lock and a socket another process holds. Only the genuine leftovers go.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -36,6 +33,18 @@ fn sleeper() -> Child {
 
 fn alive(c: &mut Child) -> bool {
     c.try_wait().unwrap().is_none()
+}
+
+/// Clean-up: kill and reap the decoys (best effort: a failure is printed, never asserted).
+fn end_all(decoys: impl IntoIterator<Item = Child>) {
+    for mut c in decoys {
+        if let Err(e) = c.kill() {
+            eprintln!("decoy {} not killed: {e}", c.id());
+        }
+        if let Err(e) = c.wait() {
+            eprintln!("decoy {} not reaped: {e}", c.id());
+        }
+    }
 }
 
 /// Write a worker record the way the manager does.
@@ -238,10 +247,7 @@ async fn reconcile_cleans_only_what_is_provably_ours_and_stale() {
 
     drop(ticket);
     drop(holder);
-    for mut c in [reused, other_program, ours] {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
+    end_all([reused, other_program, ours]);
     manager.shutdown().await;
 }
 

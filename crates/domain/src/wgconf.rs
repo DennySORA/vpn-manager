@@ -24,6 +24,16 @@ pub struct ParsedConfig {
     pub public: PublicConfig,
 }
 
+/// Shows the public part only; the private and preshared keys stay out of logs.
+impl std::fmt::Debug for ParsedConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedConfig")
+            .field("preshared_key", &self.preshared_key.is_some())
+            .field("public", &self.public)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Everything except the secrets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicConfig {

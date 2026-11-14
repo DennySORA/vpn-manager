@@ -6,7 +6,7 @@
 //!
 //! A table that cannot be read is an error, never an empty table: "no process found" is only
 //! ever concluded from a successful read.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "process table scans and signalling call kill/killpg, clock_gettime, sysconf and libproc via libc"
 )]
@@ -154,7 +154,7 @@ impl TcpSocket {
     /// A connection that reached the process over a network interface: its local address is a
     /// specific one that is not loopback. A socket that is only bound (0.0.0.0, `::`) is not.
     #[must_use]
-    pub const fn from_network(&self) -> bool {
+    pub const fn is_from_network(&self) -> bool {
         let ip = self.local.ip().to_canonical();
         !self.listening && !ip.is_loopback() && !ip.is_unspecified()
     }
@@ -365,6 +365,7 @@ const MAX_EXAMINED: usize = 16_384;
 /// - Other runs: `VPNM_RUN=<run id>` in the environment a process started with (Linux
 ///   `/proc/<pid>/environ`). Inherited, but a program can be started with a cleared environment:
 ///   not authoritative. macOS shows no other process's environment: no marker there.
+#[derive(Debug)]
 pub struct RunMarker {
     env: Vec<u8>,
     /// The paths the run's profile denies and allows.
@@ -504,7 +505,13 @@ pub fn signal_tree(root: ProcessIdentity, tracked: &[ProcessIdentity], force: bo
         }
     }
     for id in tracked {
-        let _ = signal(*id, sig);
+        // One that is gone, or whose pid now names another process, is left alone.
+        if !signal(*id, sig) {
+            tracing::trace!(
+                pid = id.pid,
+                "tracked process not signalled: gone or replaced"
+            );
+        }
     }
 }
 
@@ -669,7 +676,7 @@ mod sys {
         let cap = needed / size_of::<libc::c_int>() + 256;
         let mut buf = vec![0 as libc::c_int; cap];
         let bytes = libc::c_int::try_from(cap * size_of::<libc::c_int>())
-            .map_err(|_| io::Error::other("the process list is too large"))?;
+            .map_err(|_too_large| io::Error::other("the process list is too large"))?;
         // SAFETY: the buffer holds `cap` ints and its size in bytes is passed.
         let got = unsafe {
             libc::proc_listpids(PROC_UID_ONLY, uid, buf.as_mut_ptr().cast::<c_void>(), bytes)

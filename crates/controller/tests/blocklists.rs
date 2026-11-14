@@ -2,10 +2,7 @@
 //! and errors, commit only of what was previewed, conflicts with the addresses a connection
 //! needs, delete protection, bans listed and lifted.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -110,7 +107,7 @@ async fn env() -> Env {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();

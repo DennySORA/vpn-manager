@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["vendor/smoltcp"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT OR Apache-2.0"
@@ -86,7 +86,9 @@ russh-sftp = "=3.0.1"
 
 # Strict static gates (docs/development.md, "靜態檢查"): every warning is an error. Unsafe code is
 # denied everywhere; crates without FFI forbid it at their root, and each FFI module states its
-# boundary in a file-scoped `allow(unsafe_code, reason = ...)`.
+# boundary in a file-scoped `expect(unsafe_code, reason = ...)`. That is the narrowest enforceable
+# replacement for a workspace-wide `forbid`, which would leave no room for the FFI of the platform
+# layer.
 [workspace.lints.rust]
 warnings = "deny"
 unsafe_code = "deny"
@@ -94,6 +96,15 @@ unsafe_op_in_unsafe_fn = "deny"
 unused_must_use = "deny"
 # Off by default (Rust 1.99): a raw pointer is taken with `&raw`, not through a reference.
 raw_borrows_via_references = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_qualifications = "deny"
+redundant_lifetimes = "deny"
+unit_bindings = "deny"
+unused_macro_rules = "deny"
+missing_debug_implementations = "deny"
+# `dead_code_pub_in_binary` is denied at the root of each program (vpnd, vpnctl, vpn-installer,
+# vpn-labpeer) instead of here: Rust 1.100 also applies it to the harness that builds a library's
+# unit tests as a binary, where every public item no test touches would be reported.
 
 # Clippy's default, pedantic, nursery and cargo groups, all denied; single lints below.
 # Cargo's own lints (Rust 1.100): what is on by default is an error here, the pedantic ones too.
@@ -108,9 +119,28 @@ nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 dbg_macro = "deny"
 todo = "deny"
+unimplemented = "deny"
 unwrap_used = "deny"
-# Every allow/expect states why (restriction lint, opted in).
+expect_used = "deny"
+panic = "deny"
+exit = "deny"
+# Programs write through their output module, whose functions state why they print.
+print_stdout = "deny"
+print_stderr = "deny"
+# Slicing a `&str` at a byte offset panics inside a multi-byte character (Chinese and Japanese text).
+string_slice = "deny"
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+map_err_ignore = "deny"
+# A suppression is an `expect` that states why (and fails once the lint no longer fires), never an
+# `allow`.
+allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+self_named_module_files = "deny"
+# `multiple_crate_versions` (cargo group) stays an error, with the reviewed duplicates in
+# clippy.toml.
 
 # Third-party code (crypto, hashing, smoltcp, hyper) is optimized even in dev builds, so local
 # runs and tests exercise realistic speeds; our own crates stay fast to compile.

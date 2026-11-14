@@ -79,6 +79,7 @@ impl GatewayCounters {
 }
 
 /// Holds a gauge one higher while it lives (a relay of a class that is counted open).
+#[derive(Debug)]
 pub struct Held<'a>(&'a AtomicU64);
 
 impl<'a> Held<'a> {

@@ -2,12 +2,9 @@
 //! stand in for destinations behind the tunnel, a stub resolver maps the test names to 127.0.0.1
 //! and the test policy admits loopback destinations (every other rule still applies).
 
-// Fixture and client helpers panic on setup failures just like the `#[test]` bodies, which
-// clippy.toml already exempts (`allow-unwrap-in-tests`).
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+// Fixture and client helpers panic on setup failures just like the `#[test]` bodies: test code
+// throughout, so clippy.toml's test exemptions (`allow-unwrap-in-tests`, ...) cover them too.
+#![cfg(test)]
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -145,7 +142,15 @@ async fn tcp_echo_on(bind: &str) -> Option<SocketAddr> {
         while let Ok((mut stream, _)) = listener.accept().await {
             tokio::spawn(async move {
                 let (mut rx, mut tx) = stream.split();
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "the echo ends with the client's side, however that ends; the half-close follows either way"
+                )]
                 let _ = tokio::io::copy(&mut rx, &mut tx).await;
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "a client that reset the connection needs no half-close"
+                )]
                 let _ = tx.shutdown().await;
             });
         }
@@ -163,6 +168,10 @@ async fn udp_echo() -> SocketAddr {
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
         while let Ok((n, src)) = socket.recv_from(&mut buf).await {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "an echo not sent shows as the missing reply the waiting test reports"
+            )]
             let _ = socket.send_to(&buf[..n], src).await;
         }
     });

@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use vpn_domain::{
-    ApiError, ErrorCode, GatewayRates, InstanceId, LiveRates, SandboxRates, ServerEvent,
-    ShapingRates, Timestamp, tr,
+    ApiError, AppRates, ErrorCode, GatewayRates, InstanceId, LiveRates, SandboxRates, SecretRef,
+    ServerEvent, ShapingRates, Timestamp, tr,
 };
 use vpn_ipc::control::{Call, ControlClient, Event, Reply};
 use vpn_ipc::worker::WorkerStatus;
@@ -21,6 +21,7 @@ use crate::hub::Hub;
 const LIVENESS_EVERY: Duration = Duration::from_secs(15);
 const LIVENESS_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[derive(Debug)]
 pub struct ManagerLink {
     path: PathBuf,
     client: RwLock<Option<ControlClient>>,
@@ -79,6 +80,18 @@ impl ManagerLink {
         }
     }
 
+    /// Delete a secret the caller no longer references, best effort: the caller's outcome does
+    /// not depend on it. One that is gone already, or that the vault keeps because a profile
+    /// still uses it, is no failure; any other failure leaves the secret unused in the vault and
+    /// is logged (its reference only, never its value).
+    pub(crate) async fn discard_secret(&self, secret: SecretRef) {
+        if let Err(e) = self.call(Call::DeleteSecret(secret)).await
+            && !matches!(e.code, ErrorCode::NotFound | ErrorCode::InUse)
+        {
+            tracing::warn!(%secret, error = %e, "unused secret not deleted from the vault");
+        }
+    }
+
     /// Keep a connection and an event subscription alive forever. The two are one link: when
     /// either breaks — the call connection is lost, the event stream ends, or the manager leaves
     /// a liveness call unanswered — both are dropped and connected again. (A call connection
@@ -87,7 +100,13 @@ impl ManagerLink {
     pub async fn run(self: Arc<Self>) {
         let mut announced: Option<bool> = None;
         loop {
-            match ControlClient::connect(&self.path).await {
+            // A manager socket in a directory that is not this user's own is never used.
+            let connected = async {
+                vpn_platform::paths::verify_socket_dir(&self.path)?;
+                ControlClient::connect(&self.path).await
+            }
+            .await;
+            match connected {
                 Ok(client) => {
                     *self.client.write() = Some(client.clone());
                     if announced != Some(true) {
@@ -173,6 +192,40 @@ impl ManagerLink {
     }
 }
 
+/// The worker's CPU time between two samples `dt` seconds apart, as a percentage of one core;
+/// `None` when either is unknown or the counter went back.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "nanoseconds become a percentage; f64 precision is ample"
+)]
+fn cpu_share(now: Option<u64>, before: Option<u64>, dt: f64) -> Option<f64> {
+    match (now, before) {
+        (Some(a), Some(b)) if a >= b => Some((a - b) as f64 / (dt * 1e9) * 100.0),
+        _ => None,
+    }
+}
+
+/// Each App's part of the payload over `dt` seconds: an App new since the previous sample, or
+/// whose counter went back, has no rate this time (the others still do).
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "byte counters become rates; f64 precision is ample"
+)]
+fn app_rates(s: &WorkerStatus, p: &WorkerStatus, dt: f64) -> Vec<AppRates> {
+    let rate = |now: u64, before: u64| (now >= before).then(|| (now - before) as f64 * 8.0 / dt);
+    s.app_payload
+        .iter()
+        .filter_map(|now| {
+            let before = p.app_payload.iter().find(|b| b.app_id == now.app_id)?;
+            Some(AppRates {
+                app_id: now.app_id,
+                rx_bps: rate(now.rx_bytes, before.rx_bytes)?,
+                tx_bps: rate(now.tx_bytes, before.tx_bytes)?,
+            })
+        })
+        .collect()
+}
+
 /// Derives rates from consecutive cumulative samples of the same generation. A new generation,
 /// a counter that went backwards or a long gap produces no rate (never a fake zero).
 #[derive(Default)]
@@ -235,6 +288,7 @@ impl RateTracker {
         ptx += apps_tx;
         // In strict mode all of it is the sandbox's: every forward ends at an App inside it.
         let sandbox = s.sandbox.map(|now| SandboxRates {
+            apps: app_rates(s, &p, dt),
             rx_bps: apps_rx,
             tx_bps: apps_tx,
             active_tcp: u32::try_from(now.tcp_flows).unwrap_or(u32::MAX),
@@ -242,10 +296,7 @@ impl RateTracker {
             evicted: now.evicted,
             table_full: now.table_full,
         });
-        let cpu = match (s.cpu_ns, p.cpu_ns) {
-            (Some(a), Some(b)) if a >= b => Some((a - b) as f64 / (dt * 1e9) * 100.0),
-            _ => None,
-        };
+        let cpu = cpu_share(s.cpu_ns, p.cpu_ns, dt);
         let shaping = match (&s.shaping, &p.shaping) {
             (Some(now), Some(before)) => {
                 // Share of the interval a capped direction waited (bridged pauses can put a

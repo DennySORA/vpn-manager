@@ -223,7 +223,7 @@ impl TunnelConnector for Netstack {
 
 /// The data path of one worker: the userspace netstack, or (Linux strict mode) kernel sockets
 /// in the sandbox's network namespace.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AnyConnector {
     Netstack(Netstack),
     #[cfg(target_os = "linux")]
@@ -231,6 +231,7 @@ pub enum AnyConnector {
 }
 
 /// A TCP stream of an [`AnyConnector`].
+#[derive(Debug)]
 pub enum AnyStream {
     Netstack(TcpStream),
     #[cfg(target_os = "linux")]
@@ -238,6 +239,7 @@ pub enum AnyStream {
 }
 
 /// A UDP socket of an [`AnyConnector`].
+#[derive(Debug)]
 pub enum AnyDatagram {
     Netstack(UdpSocket),
     #[cfg(target_os = "linux")]
@@ -308,7 +310,7 @@ impl TunnelDatagram for AnyDatagram {
 
 /// The inbound side of a worker's data path (port forwards): the netstack's listeners, or (Linux
 /// strict mode) kernel sockets on the sandbox's tunnel addresses.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AnyInbound {
     Netstack(Netstack),
     #[cfg(target_os = "linux")]
@@ -316,6 +318,7 @@ pub enum AnyInbound {
 }
 
 /// A reserved port of an [`AnyInbound`].
+#[derive(Debug)]
 pub enum AnyPort {
     Netstack(PortReservation),
     #[cfg(target_os = "linux")]
@@ -323,6 +326,7 @@ pub enum AnyPort {
 }
 
 /// A TCP listener of an [`AnyInbound`].
+#[derive(Debug)]
 pub enum AnyListener {
     Netstack(TcpListener),
     #[cfg(target_os = "linux")]

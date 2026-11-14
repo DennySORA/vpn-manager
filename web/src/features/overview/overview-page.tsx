@@ -1,18 +1,18 @@
-// 總覽 (/): the summary of protection (signature 1), the setup steps while they matter, the traffic topology (effect
+// 總覽 (/): the summary of protection (signature 1), the traffic topology (effect
 // region A) with the traffic chart under it, and what needs handling. The sections rise in one after another when the page opens; counters fade when
 // they change; items needing attention come and go with presence and the list slides (Motion layout). The brand scene drifts
 // behind the header as the page's ambient background (a brand moment; the data panels in front stay solid).
-import { Building2, Check, CircleAlert, FilePlus2, Network, Play, Plus, ShieldCheck } from "lucide-react";
+import { CircleAlert, FilePlus2, Network, Plus, ShieldCheck } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { Link, useNavigate } from "react-router";
-import { useApps, useGateways, useInstances, useLiveRatesMap, useProfiles, useSystemStatus } from "@/api/queries";
+import { useApps, useInstances, useLiveRatesMap, useSystemStatus } from "@/api/queries";
 import type { InstanceView, SystemStatus } from "@/api/types";
 import { BrandBackdrop } from "@/components/scene/brand-backdrop";
 import { m as shell } from "@/components/shell/messages";
 import { Page, PageHeader } from "@/components/shell/page";
 import { useManagerConnected } from "@/components/shell/service";
 import { Button } from "@/components/ui/button";
-import { ChangeFade, ChangeValue } from "@/components/ui/change-value";
+import { ChangeValue } from "@/components/ui/change-value";
 import { DockBody, DockHeader, DockPanel } from "@/components/ui/dock";
 import { LIST_ROW, LIST_ROW_IDLE, STAGGER_IN } from "@/components/ui/look";
 import { m as ui } from "@/components/ui/messages";
@@ -27,7 +27,7 @@ import { cn } from "@/lib/cn";
 import { formatBps } from "@/lib/format";
 import { CLOCK_SKEW_NOTICE_MS, useServerNow, useServerOffset } from "@/lib/server-clock";
 import { m } from "./messages";
-import { liveSandboxNote, liveTotal, onboarding } from "./model";
+import { liveSandboxNote, liveTotal } from "./model";
 import { Topology } from "./topology";
 import { TrafficChart } from "./traffic-chart";
 
@@ -69,149 +69,6 @@ function Metric({
         </p>
       ) : null}
     </div>
-  );
-}
-
-function Step({
-  done,
-  title,
-  children,
-  action,
-  index,
-}: {
-  done: boolean;
-  title: string;
-  children: ReactNode;
-  action?: ReactNode;
-  index: number;
-}) {
-  return (
-    <li style={staggerStyle(index)} className={cn("flex items-start gap-3 py-3", STAGGER_IN)}>
-      <span
-        className={cn(
-          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border transition-colors duration-(--duration-spring-snappy) ease-(--ease-spring-snappy)",
-          done ? "border-success/40 bg-success/12 text-success" : "border-line-strong text-fg-tertiary",
-        )}
-      >
-        {/* The mark turns into a check when the step is done (a short fade, never on the first render). */}
-        <ChangeFade value={done} className="flex">
-          {done ? (
-            <Check aria-hidden className="size-3.5" strokeWidth={2.5} />
-          ) : (
-            <span className="size-1.5 rounded-full bg-current" />
-          )}
-        </ChangeFade>
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className={cn("text-body font-medium", done ? "text-fg-tertiary" : "text-fg")}>
-          {title}
-          <span className="sr-only">{done ? m.onboarding.done : m.onboarding.notDone}</span>
-        </p>
-        <p className="text-data text-fg-tertiary">{children}</p>
-      </div>
-      {!done && action ? <div className="shrink-0">{action}</div> : null}
-    </li>
-  );
-}
-
-function Onboarding({
-  profiles,
-  views,
-  gateways,
-  index,
-}: {
-  profiles: number;
-  views: InstanceView[];
-  gateways: number;
-  index: number;
-}) {
-  const navigate = useNavigate();
-  const { steps, next, show } = onboarding(profiles, views, gateways);
-  if (!show) return null;
-  return (
-    <section
-      aria-labelledby="onboarding-title"
-      style={staggerStyle(index)}
-      className={cn("panel px-5 py-4", STAGGER_IN)}
-    >
-      <h2 id="onboarding-title" className="text-section font-semibold text-fg">
-        {m.onboarding.title}
-      </h2>
-      <p className="text-data text-fg-tertiary">{m.onboarding.intro}</p>
-      <ol className="mt-2 divide-y divide-line-subtle">
-        <Step
-          index={0}
-          done={steps[0]}
-          title={m.onboarding.profile.title}
-          action={
-            next === 0 ? (
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button size="sm" icon={Building2} onClick={() => void navigate("/providers?add=1")}>
-                  {m.onboarding.profile.addAccount}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  icon={FilePlus2}
-                  onClick={() => void navigate("/profiles?import=1")}
-                >
-                  {m.onboarding.profile.importConf}
-                </Button>
-              </div>
-            ) : null
-          }
-        >
-          {m.onboarding.profile.body}
-        </Step>
-        <Step
-          index={1}
-          done={steps[1]}
-          title={m.onboarding.connection.title}
-          action={
-            next === 1 ? (
-              <Button size="sm" variant="primary" icon={Plus} onClick={() => void navigate("/instances?new=1")}>
-                {ui.common.create}
-              </Button>
-            ) : null
-          }
-        >
-          {m.onboarding.connection.body}
-        </Step>
-        <Step
-          index={2}
-          done={steps[2]}
-          title={m.onboarding.gateway.title}
-          action={
-            next === 2 ? (
-              <Button size="sm" variant="primary" icon={Plus} onClick={() => void navigate("/gateways?new=1")}>
-                {ui.common.create}
-              </Button>
-            ) : null
-          }
-        >
-          {m.onboarding.gateway.body}
-        </Step>
-        <Step
-          index={3}
-          done={steps[3]}
-          title={m.onboarding.verify.title}
-          action={
-            next === 3 && views[0] ? (
-              <Button
-                size="sm"
-                variant="primary"
-                icon={Play}
-                onClick={() => void navigate(`/instances/${views[0]?.spec.id}`)}
-              >
-                {m.onboarding.verify.go}
-              </Button>
-            ) : null
-          }
-        >
-          {m.onboarding.verify.body}
-        </Step>
-      </ol>
-    </section>
   );
 }
 
@@ -333,8 +190,6 @@ function LiveTotals({ ids }: { ids: string[] }) {
 export function OverviewPage() {
   const navigate = useNavigate();
   const instances = useInstances();
-  const profiles = useProfiles();
-  const gateways = useGateways();
   const apps = useApps();
   const views = instances.data ?? [];
   // A problem first, else configuration that applies only after a restart.
@@ -434,12 +289,6 @@ export function OverviewPage() {
                     </>
                   )}
                 </section>
-                <Onboarding
-                  index={2}
-                  profiles={profiles.data?.length ?? 0}
-                  views={views}
-                  gateways={gateways.data?.length ?? 0}
-                />
                 {views.length ? (
                   <>
                     <Topology index={3} views={views} apps={apps.data ?? []} liveIds={running} />

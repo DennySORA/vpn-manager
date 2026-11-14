@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use vpn_domain::{CongestionFallback, CongestionStatus};
-use vpn_ipc::worker::SandboxWire;
+use vpn_ipc::worker::{SandboxPortWire, SandboxWire};
 use vpn_tunnel::{
     AnyConnector, AnyInbound, FlowClass, GateState, PeerSnapshot, TransportPlan, TransportSnapshot,
     Tunnel, TunnelError,
@@ -41,7 +41,7 @@ pub struct PlaneCounters {
     pub sandbox: Option<SandboxWire>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Plane {
     Netstack(Tunnel),
     #[cfg(target_os = "linux")]
@@ -83,6 +83,15 @@ impl Plane {
             Self::Netstack(t) => t.netstack().set_gate(next),
             #[cfg(target_os = "linux")]
             Self::Strict(t) => t.set_gate(next),
+        }
+    }
+
+    /// Narrow the gate to `next` (`Probe` or `Sealed`). A sealed gate never changes again and
+    /// admits no more than `next` does, so the state in force needs no further check.
+    pub(crate) fn narrow_gate(&self, next: GateState) {
+        let in_force = self.set_gate(next);
+        if in_force != next {
+            tracing::trace!(asked = ?next, ?in_force, "the gate stays sealed");
         }
     }
 
@@ -174,6 +183,13 @@ impl Plane {
     /// The userspace stack's is known from the start; the strict plane's is what the kernel
     /// reported for the connection opened last, `None` before the first.
     #[must_use]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "only the netstack is built here; the strict plane (Linux) has `None` before its first connection"
+        )
+    )]
     pub fn congestion(&self) -> Option<CongestionStatus> {
         match self {
             Self::Netstack(t) => {
@@ -203,6 +219,32 @@ impl Plane {
             Self::Netstack(t) => t.netstack().stats().active_control.load(Ordering::Relaxed) as u64,
             #[cfg(target_os = "linux")]
             Self::Strict(t) => t.connector().stats().active_control.load(Ordering::Relaxed) as u64,
+        }
+    }
+
+    /// Strict mode: the Apps' payload per local port of the sandbox (empty on the netstack).
+    #[must_use]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "only the netstack arm exists off Linux; the strict arm collects a Vec"
+        )
+    )]
+    pub fn sandbox_ports(&self) -> Vec<SandboxPortWire> {
+        match self {
+            Self::Netstack(_) => Vec::new(),
+            #[cfg(target_os = "linux")]
+            Self::Strict(t) => t
+                .port_payload()
+                .into_iter()
+                .map(|p| SandboxPortWire {
+                    udp: p.l4 == vpn_tunnel::strict::L4::Udp,
+                    port: p.port,
+                    rx_bytes: p.rx_bytes,
+                    tx_bytes: p.tx_bytes,
+                })
+                .collect(),
         }
     }
 

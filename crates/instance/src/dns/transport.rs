@@ -831,7 +831,9 @@ impl<C: TunnelConnector> Upstreams<C> {
                 .await
                 .map_err(handshake_failed)?;
             let driver = tokio::spawn(async move {
-                let _ = conn.await;
+                if let Err(e) = conn.await {
+                    tracing::debug!(error = %e, "DoH connection ended with an error");
+                }
             });
             (Sender::H2(sender), driver)
         } else {
@@ -841,7 +843,9 @@ impl<C: TunnelConnector> Upstreams<C> {
                 .await
                 .map_err(handshake_failed)?;
             let driver = tokio::spawn(async move {
-                let _ = conn.await;
+                if let Err(e) = conn.await {
+                    tracing::debug!(error = %e, "DoH connection ended with an error");
+                }
             });
             (Sender::H1(sender), driver)
         };
@@ -975,7 +979,7 @@ where
 {
     let id: u16 = rand::random();
     let query = q.encode(id).ok_or(AttemptError::Malformed)?;
-    let len = u16::try_from(query.len()).map_err(|_| AttemptError::Malformed)?;
+    let len = u16::try_from(query.len()).map_err(|_too_long| AttemptError::Malformed)?;
     let mut framed = Vec::with_capacity(query.len() + 2);
     framed.extend_from_slice(&len.to_be_bytes());
     framed.extend_from_slice(&query);
@@ -1010,6 +1014,12 @@ async fn post(
     query: Bytes,
 ) -> Result<Vec<u8>, AttemptError> {
     let broken = |_| AttemptError::Io(io::ErrorKind::ConnectionAborted);
+    // The URL was checked when the server was configured; a request that still does not build
+    // is no exchange, and why is logged.
+    let unbuildable = |e: http::Error| {
+        tracing::debug!(error = %e, "DoH request not built");
+        AttemptError::Malformed
+    };
     let request = Request::builder()
         .method(Method::POST)
         .header(header::CONTENT_TYPE, DNS_MESSAGE)
@@ -1019,7 +1029,7 @@ async fn post(
             let request = request
                 .uri(endpoint.uri.clone())
                 .body(Full::new(query))
-                .map_err(|_| AttemptError::Malformed)?;
+                .map_err(unbuildable)?;
             sender.ready().await.map_err(broken)?;
             sender.send_request(request).await.map_err(broken)?
         }
@@ -1028,7 +1038,7 @@ async fn post(
                 .uri(endpoint.path.clone())
                 .header(header::HOST, endpoint.authority.as_str())
                 .body(Full::new(query))
-                .map_err(|_| AttemptError::Malformed)?;
+                .map_err(unbuildable)?;
             sender.ready().await.map_err(broken)?;
             sender.send_request(request).await.map_err(broken)?
         }

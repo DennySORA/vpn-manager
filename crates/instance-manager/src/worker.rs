@@ -87,7 +87,7 @@ async fn handshake(
 ) -> Result<(), SpawnError> {
     let first = tokio::time::timeout(HELLO_TIMEOUT, rx.recv::<FromWorker>())
         .await
-        .map_err(|_| SpawnError::Timeout)?
+        .map_err(|_elapsed| SpawnError::Timeout)?
         .map_err(|e| SpawnError::Protocol(e.to_string()))?;
     match first {
         Some((
@@ -120,7 +120,7 @@ async fn handshake(
         .map_err(|e| SpawnError::Protocol(e.to_string()))?;
     let reply = tokio::time::timeout(CONFIGURE_TIMEOUT, rx.recv::<FromWorker>())
         .await
-        .map_err(|_| SpawnError::Timeout)?
+        .map_err(|_elapsed| SpawnError::Timeout)?
         .map_err(|e| SpawnError::Protocol(e.to_string()))?;
     match reply {
         Some((FromWorker::Configured, _)) => Ok(()),
@@ -181,8 +181,13 @@ pub async fn spawn(
     let result = handshake(&mut rx, &mut tx, config, listener_fds).await;
 
     if let Err(e) = result {
-        let _ = child.start_kill();
-        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        kill_child(&mut child, pid);
+        if tokio::time::timeout(Duration::from_secs(2), reap_child(&mut child, pid))
+            .await
+            .is_err()
+        {
+            tracing::debug!(pid, "worker not reaped in time after its failed start");
+        }
         return Err(e);
     }
 
@@ -192,12 +197,16 @@ pub async fn spawn(
             if let Ok(Some((msg, _))) = rx.recv::<FromWorker>().await {
                 // Status samples may be dropped under pressure; lifecycle events never are.
                 if matches!(msg, FromWorker::Status(_)) {
-                    let _ = ev_tx.try_send(WorkerEvent::Msg(msg));
+                    if ev_tx.try_send(WorkerEvent::Msg(msg)).is_err() {
+                        tracing::trace!(pid, "worker status sample dropped");
+                    }
                 } else if ev_tx.send(WorkerEvent::Msg(msg)).await.is_err() {
                     return;
                 }
             } else {
-                let _ = ev_tx.send(WorkerEvent::Closed).await;
+                if ev_tx.send(WorkerEvent::Closed).await.is_err() {
+                    tracing::trace!(pid, "worker closed; nobody waits for its events any more");
+                }
                 return;
             }
         }
@@ -234,38 +243,57 @@ impl WorkerHandle {
         sent
     }
 
+    /// Send a message whose failure asks nothing more of the caller: as with [`Self::send`], one
+    /// that cannot be sent ends the worker (logged there), and its `Closed` event follows.
+    pub async fn tell(&mut self, msg: &ToWorker) {
+        let sent = self.tx.send(msg, &[]).await;
+        self.ended_unless_sent(&sent);
+    }
+
     fn ended_unless_sent(&mut self, sent: &std::io::Result<()>) {
         if let Err(e) = sent {
             tracing::warn!(pid = self.pid, error = %e, "a message could not reach the worker: ending it");
-            let _ = self.child.start_kill();
+            kill_child(&mut self.child, self.pid);
         }
     }
 
     /// Ask the worker to stop, then make sure the process is gone (killed after `grace`).
     /// Returns once the process has been reaped — the proof its descriptors are closed.
     pub async fn stop(mut self, grace: Duration) {
-        let _ = self
-            .tx
-            .send(
-                &ToWorker::Stop {
-                    grace_ms: grace.as_millis().min(2000) as u32,
-                },
-                &[],
-            )
-            .await;
+        let stop = ToWorker::Stop {
+            grace_ms: grace.as_millis().min(2000) as u32,
+        };
+        if let Err(e) = self.tx.send(&stop, &[]).await {
+            // Gone already, or killed below once `grace` is over.
+            tracing::debug!(pid = self.pid, error = %e, "stop request not delivered to the worker");
+        }
         if tokio::time::timeout(grace + Duration::from_secs(2), self.child.wait())
             .await
             .is_err()
         {
-            let _ = self.child.start_kill();
-            let _ = self.child.wait().await;
+            kill_child(&mut self.child, self.pid);
+            reap_child(&mut self.child, self.pid).await;
         }
     }
 
     /// Kill immediately and reap.
     pub async fn kill(mut self) {
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
+        kill_child(&mut self.child, self.pid);
+        reap_child(&mut self.child, self.pid).await;
+    }
+}
+
+/// Kill the worker process `pid`. A kill that fails finds it reaped already.
+fn kill_child(child: &mut Child, pid: u32) {
+    if let Err(e) = child.start_kill() {
+        tracing::debug!(pid, error = %e, "worker not killed: it is gone already");
+    }
+}
+
+/// Wait for the (ending or killed) worker process `pid` and reap it.
+async fn reap_child(child: &mut Child, pid: u32) {
+    if let Err(e) = child.wait().await {
+        tracing::warn!(pid, error = %e, "worker not reaped");
     }
 }
 

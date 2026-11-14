@@ -46,6 +46,14 @@ impl RejectReason {
     }
 }
 
+/// One step of refusing a client. The client may hang up at any point: every step is still
+/// tried, and what fails concerns only that client.
+fn tried<T, E: std::fmt::Display>(step: &str, result: Result<T, E>) {
+    if let Err(e) = result {
+        tracing::trace!(error = %e, "refused client: {step} failed");
+    }
+}
+
 /// Accept and refuse until `cancel` fires.
 ///
 /// SOCKS5 clients get a method-selection reply followed by 0x02 "connection not allowed by ruleset"
@@ -75,15 +83,22 @@ pub async fn reject_loop(listener: TcpListener, reason: RejectReason, cancel: Ca
                 let mut greeting = [0u8; 2];
                 if stream.read_exact(&mut greeting).await.is_ok() {
                     let mut methods = vec![0u8; greeting[1] as usize];
-                    let _ = stream.read_exact(&mut methods).await;
-                    let _ = stream.write_all(&[0x05, 0x00]).await;
+                    tried("reading the methods", stream.read_exact(&mut methods).await);
+                    tried("choosing no auth", stream.write_all(&[0x05, 0x00]).await);
                     let mut req = [0u8; 4];
-                    let _ =
+                    let request =
                         tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut req))
                             .await;
-                    let _ = stream
-                        .write_all(&[0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                        .await;
+                    tried(
+                        "reading the request",
+                        request.unwrap_or_else(|elapsed| Err(elapsed.into())),
+                    );
+                    tried(
+                        "refusing the request",
+                        stream
+                            .write_all(&[0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                            .await,
+                    );
                 }
             } else {
                 // Whoever reads it, in each language: the request is not read.
@@ -94,11 +109,11 @@ pub async fn reject_loop(listener: TcpListener, reason: RejectReason, cancel: Ca
                     body.len(),
                     body
                 );
-                let _ = stream.write_all(resp.as_bytes()).await;
+                tried("answering 503", stream.write_all(resp.as_bytes()).await);
             }
             // Lingering close: send FIN, then drain what the client already sent. Closing with
             // unread input makes the kernel send RST, and the client would lose our reply.
-            let _ = stream.shutdown().await;
+            tried("closing", stream.shutdown().await);
             let mut sink = [0u8; 4096];
             let drain = async {
                 let mut total = 0usize;
@@ -109,7 +124,10 @@ pub async fn reject_loop(listener: TcpListener, reason: RejectReason, cancel: Ca
                     total += n;
                 }
             };
-            let _ = tokio::time::timeout(Duration::from_secs(2), drain).await;
+            tried(
+                "draining",
+                tokio::time::timeout(Duration::from_secs(2), drain).await,
+            );
         });
     }
 }

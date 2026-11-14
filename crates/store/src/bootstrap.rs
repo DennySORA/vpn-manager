@@ -257,10 +257,13 @@ fn text_ts(s: &str) -> Result<Timestamp, StoreError> {
     ))?)
 }
 
-fn parse_id<T: std::str::FromStr>(s: Option<String>, what: &str) -> Result<Option<T>, StoreError> {
+fn parse_id<T: std::str::FromStr<Err: std::fmt::Display>>(
+    s: Option<String>,
+    what: &str,
+) -> Result<Option<T>, StoreError> {
     s.map(|v| {
         v.parse()
-            .map_err(|_| StoreError::Corrupt(format!("bootstrap {what}")))
+            .map_err(|e| StoreError::Corrupt(format!("bootstrap {what}: {e}")))
     })
     .transpose()
 }

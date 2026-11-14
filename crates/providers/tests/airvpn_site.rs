@@ -9,10 +9,7 @@
 //! Every log line is captured: none may carry the user name, the password, a cookie or the
 //! token, and neither may any error. Nothing touches a socket, a resolver or `AirVPN`.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 #[path = "support/airvpn_site.rs"]
 mod fake_site;

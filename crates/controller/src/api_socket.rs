@@ -14,6 +14,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 /// A Unix listener that hands over only connections from processes of `uid`; any other peer is
 /// closed before a byte is read.
+#[derive(Debug)]
 pub struct SameUserListener {
     inner: UnixListener,
     uid: u32,
@@ -60,6 +61,7 @@ impl axum::serve::Listener for SameUserListener {
 
 /// The bound API socket; [`ApiSocket::remove`] deletes the file only while it is still the one
 /// we created.
+#[derive(Debug)]
 pub struct ApiSocket {
     pub listener: UnixListener,
     path: PathBuf,
@@ -119,8 +121,10 @@ impl ApiSocket {
     pub fn remove(path: &Path, inode: (u64, u64)) {
         if std::fs::symlink_metadata(path)
             .is_ok_and(|m| m.file_type().is_socket() && (m.dev(), m.ino()) == inode)
+            && let Err(e) = std::fs::remove_file(path)
         {
-            let _ = std::fs::remove_file(path);
+            // Left behind, it is a stale socket of ours that the next start replaces.
+            tracing::warn!(error = %e, path = %path.display(), "API socket file not removed");
         }
     }
 

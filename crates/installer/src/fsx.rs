@@ -25,6 +25,10 @@ fn staged_name(dest: &Path) -> PathBuf {
 /// Writes `bytes` to `dest` atomically with `mode` (a running program keeps its old file).
 pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
     let staged = staged_name(dest);
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a leftover of an interrupted run, usually absent; one that cannot be removed makes `create_new` below fail"
+    )]
     let _ = fs::remove_file(&staged);
     let result = (|| {
         let mut f = OpenOptions::new()
@@ -40,11 +44,18 @@ pub fn write_atomic(dest: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
         fs::rename(&staged, dest)
     })();
     if result.is_err() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "clean-up after a failed write, whose own error is the one returned"
+        )]
         let _ = fs::remove_file(&staged);
     }
     result?;
     if let Some(dir) = dest.parent().and_then(|d| fs::File::open(d).ok()) {
-        // Best effort: the rename is atomic either way.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best effort: the rename is atomic either way"
+        )]
         let _ = dir.sync_all();
     }
     Ok(())
@@ -64,6 +75,18 @@ pub fn remove_dir_if_present(path: &Path) -> io::Result<bool> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
+}
+
+/// Removes a directory tree nothing needs any more (the staging area, programs of a failed or
+/// replaced version, old backups, sockets after a purge). Best effort: one that stays only takes
+/// space and is removed or replaced by a later run, so a failure does not stop the job that is
+/// finishing.
+pub fn discard_dir(path: &Path) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best effort, as documented: nothing depends on the directory being gone"
+    )]
+    let _ = fs::remove_dir_all(path);
 }
 
 /// Absolute, UTF-8, without control characters or `.`/`..` parts: written verbatim into service

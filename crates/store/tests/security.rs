@@ -2,11 +2,9 @@
 //! deleted while a security profile uses them; URL refresh state; the overlay revision counter;
 //! bans with their limit, renewal and expiry.
 
-// Test fixtures: a failed setup step should panic right there.
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+// Test code throughout, its helper fns too: they get clippy.toml's test exemptions, so a failed
+// setup step panics right there.
+#![cfg(test)]
 
 use std::assert_matches;
 use vpn_domain::ipset::IpRangeSet;

@@ -16,7 +16,7 @@
 //!   back before the databases open on a full volume). Both are allocated again once there is room.
 //!   Control data and secrets are never deleted for space.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns the statvfs, fallocate and F_PREALLOCATE calls through libc"
 )]
@@ -66,6 +66,7 @@ pub trait SpaceProbe: Send + Sync {
 }
 
 /// `statvfs(2)`: blocks available to this (unprivileged) user.
+#[derive(Debug)]
 pub struct Statvfs;
 
 impl SpaceProbe for Statvfs {
@@ -78,18 +79,24 @@ impl SpaceProbe for Statvfs {
         if unsafe { libc::statvfs(path.as_ptr(), &raw mut st) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        #[allow(
-            clippy::useless_conversion,
-            reason = "the field widths differ between OSes"
+        #[cfg_attr(
+            target_pointer_width = "64",
+            expect(
+                clippy::useless_conversion,
+                reason = "`f_frsize` and `f_bsize` are `c_ulong`: `u64` on 64-bit targets, `u32` on 32-bit ones"
+            )
         )]
         let unit = u64::from(if st.f_frsize > 0 {
             st.f_frsize
         } else {
             st.f_bsize
         });
-        #[allow(
-            clippy::useless_conversion,
-            reason = "the field widths differ between OSes"
+        #[cfg_attr(
+            target_os = "linux",
+            expect(
+                clippy::useless_conversion,
+                reason = "`fsblkcnt_t` is already `u64` on Linux, but `u32` on macOS"
+            )
         )]
         let (avail, blocks) = (u64::from(st.f_bavail), u64::from(st.f_blocks));
         Ok(Space {
@@ -176,6 +183,14 @@ pub struct Disk {
     dir: PathBuf,
     probe: Arc<dyn SpaceProbe>,
     state: Mutex<State>,
+}
+
+impl std::fmt::Debug for Disk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Disk")
+            .field("dir", &self.dir)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the metrics database does with the space it has now ([`Disk::metrics`]).
@@ -447,6 +462,10 @@ impl Disk {
 fn allocate(path: &Path, len: u64) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension("reserve.part");
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best effort: a leftover that cannot be removed makes `create_new` below fail, and that error is returned"
+    )]
     let _ = std::fs::remove_file(&tmp);
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -459,6 +478,10 @@ fn allocate(path: &Path, len: u64) -> io::Result<()> {
     match done {
         Ok(()) => std::fs::rename(&tmp, path),
         Err(e) => {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "best effort: the caller gets the allocation's own error, and the next attempt removes a part that stays"
+            )]
             let _ = std::fs::remove_file(&tmp);
             Err(e)
         }
@@ -468,7 +491,8 @@ fn allocate(path: &Path, len: u64) -> io::Result<()> {
 #[cfg(target_os = "linux")]
 fn preallocate(file: &std::fs::File, len: u64) -> io::Result<()> {
     use std::os::fd::AsRawFd;
-    let len = libc::off_t::try_from(len).map_err(|_| io::Error::other("reserve too large"))?;
+    let len = libc::off_t::try_from(len)
+        .map_err(|_out_of_range| io::Error::other("reserve too large"))?;
     // SAFETY: a file descriptor we own, offset 0, a positive length.
     let r = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, len) };
     if r == 0 {
@@ -484,7 +508,8 @@ fn preallocate(file: &std::fs::File, len: u64) -> io::Result<()> {
 #[cfg(target_os = "macos")]
 fn preallocate(file: &std::fs::File, len: u64) -> io::Result<()> {
     use std::os::fd::AsRawFd;
-    let length = libc::off_t::try_from(len).map_err(|_| io::Error::other("reserve too large"))?;
+    let length = libc::off_t::try_from(len)
+        .map_err(|_out_of_range| io::Error::other("reserve too large"))?;
     let mut store = libc::fstore_t {
         fst_flags: libc::F_ALLOCATEALL,
         fst_posmode: libc::F_PEOFPOSMODE,
@@ -885,7 +910,7 @@ pub mod tests {
             .retry_when_full(Arc::new(move |c: &mut Connection| {
                 let released = disk.release_reserve();
                 if released {
-                    let _ = c.pragma_update(None, "max_page_count", 1_000_000);
+                    c.pragma_update(None, "max_page_count", 1_000_000).unwrap();
                 }
                 released
             }));
@@ -936,7 +961,7 @@ pub mod tests {
             .retry_when_full(Arc::new(move |c: &mut Connection| {
                 let released = disk.release_reserve();
                 if released {
-                    let _ = c.pragma_update(None, "max_page_count", 1_000_000);
+                    c.pragma_update(None, "max_page_count", 1_000_000).unwrap();
                 }
                 released
             }));
@@ -1004,7 +1029,7 @@ pub mod tests {
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: false,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         }
     }
 

@@ -9,7 +9,7 @@ use hickory_proto::op::{
     Edns, Header, Message, MessageType, Metadata, OpCode, Query, ResponseCode,
 };
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
-use hickory_proto::serialize::binary::BinDecodable;
+use hickory_proto::serialize::binary::{BinDecodable, DecodeError};
 
 /// Largest DNS message on any transport (TCP length prefix, `DoH` body limit).
 pub(super) const MAX_MESSAGE: usize = 65_535;
@@ -117,14 +117,19 @@ pub(super) fn check_response(bytes: &[u8], id: u16, q: &Question) -> Result<Mess
     if bytes.len() > MAX_MESSAGE {
         return Err(Reject::Malformed);
     }
-    let header = Header::from_bytes(bytes).map_err(|_| Reject::Malformed)?;
+    // Upstream bytes that do not parse are only discarded; why goes to the trace log.
+    let unparsable = |e: DecodeError| {
+        tracing::trace!(error = %e, "upstream DNS message not parsable");
+        Reject::Malformed
+    };
+    let header = Header::from_bytes(bytes).map_err(unparsable)?;
     if header.metadata.message_type != MessageType::Response || header.metadata.id != id {
         return Err(Reject::Mismatch);
     }
     if !plausible(&header, bytes.len()) {
         return Err(Reject::Malformed);
     }
-    let msg = Message::from_vec(bytes).map_err(|_| Reject::Malformed)?;
+    let msg = Message::from_vec(bytes).map_err(unparsable)?;
     if msg.metadata.op_code != OpCode::Query {
         return Err(Reject::Mismatch);
     }

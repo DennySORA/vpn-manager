@@ -4,10 +4,7 @@
 //! connection; recovery is required only when the selected egress cannot come back by itself, and
 //! a manual rebootstrap is refused — with the exact reason — whenever there is another way out.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -89,7 +86,7 @@ fn spec(name: &str, profile_id: ProfileId) -> InstanceSpec {
         purpose: InstancePurpose::General,
         limits: InstanceLimits::default(),
         strict: false,
-        transport: vpn_domain::TransportRef::default(),
+        transport: TransportRef::default(),
     }
 }
 
@@ -111,7 +108,12 @@ async fn serve_manager(paths: &Paths, store: Arc<Store>) -> Served {
         .await
         .unwrap();
     let sock = paths.manager_socket();
-    let _ = std::fs::remove_file(&sock);
+    // Normally there is none; one left behind would make the bind below fail.
+    if let Err(e) = std::fs::remove_file(&sock)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("stale manager socket not removed: {e}");
+    }
     tokio::spawn(serve(
         tokio::net::UnixListener::bind(&sock).unwrap(),
         manager.clone(),

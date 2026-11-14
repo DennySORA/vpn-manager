@@ -3,7 +3,7 @@
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
-use crate::handover::{HELD, Handover};
+use crate::handover::{Handover, held};
 
 /// `parking_lot::Mutex` under the workspace's hand-over schedule (see the crate documentation).
 pub struct Mutex<T> {
@@ -46,6 +46,7 @@ impl<T: fmt::Debug> fmt::Debug for Mutex<T> {
 
 /// The held lock; dropping it unlocks.
 #[must_use = "the lock is released as soon as the guard is dropped"]
+#[derive(Debug)]
 pub struct MutexGuard<'a, T> {
     /// `None` only once `drop` has taken it.
     held: Option<parking_lot::MutexGuard<'a, T>>,
@@ -56,13 +57,13 @@ impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        self.held.as_deref().expect(HELD)
+        held(self.held.as_deref())
     }
 }
 
 impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.held.as_deref_mut().expect(HELD)
+        held(self.held.as_deref_mut())
     }
 }
 

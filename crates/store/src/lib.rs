@@ -121,6 +121,7 @@ pub struct SecretMeta {
     pub created_at: Timestamp,
 }
 
+#[derive(Debug)]
 pub struct Store {
     control: Db,
     metrics: Db,
@@ -240,7 +241,7 @@ impl Store {
                 .optional()?;
             if let Some(v) = existing {
                 v.parse()
-                    .map_err(|_| StoreError::Corrupt("installation id".into()))?
+                    .map_err(|e| StoreError::Corrupt(format!("installation id: {e}")))?
             } else {
                 let id = InstallationId::new();
                 conn.execute(
@@ -577,10 +578,8 @@ impl Store {
                     let rows = stmt.query_map(params![ids], |r| r.get::<_, String>(0))?;
                     rows.collect::<Result<_, _>>()?
                 };
-                let confirmed: std::collections::BTreeSet<String> = gateways
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
+                let confirmed: std::collections::BTreeSet<String> =
+                    gateways.iter().map(ToString::to_string).collect();
                 if now != confirmed {
                     return Err(StoreError::InvalidState(tr!(
                         "The Gateways changed after you confirmed; confirm again before deleting",
@@ -1193,7 +1192,10 @@ impl Store {
                 for row in rows {
                     let (id, kind, label, fp, at) = row?;
                     out.push(SecretMeta {
-                        secret_ref: SecretRef(id.parse().map_err(|_| StoreError::Corrupt("secret id".into()))?),
+                        secret_ref: SecretRef(
+                            id.parse()
+                                .map_err(|e| StoreError::Corrupt(format!("secret id: {e}")))?,
+                        ),
                         kind,
                         label,
                         public_fingerprint: fp,
@@ -1358,9 +1360,9 @@ fn intent_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<IntentRow> {
     let id: String = r.get(0)?;
     let desired: String = r.get(1)?;
     Ok(IntentRow {
-        instance_id: id
-            .parse()
-            .map_err(|_| rusqlite::Error::InvalidColumnName("instance_id".into()))?,
+        instance_id: id.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?,
         desired: if desired == "running" {
             DesiredState::Running
         } else {
@@ -1419,7 +1421,7 @@ fn read_operation(c: &rusqlite::Connection, id: &str) -> Result<Option<Operation
     Ok(Some(Operation {
         id: id
             .parse()
-            .map_err(|_| StoreError::Corrupt("operation id".into()))?,
+            .map_err(|e| StoreError::Corrupt(format!("operation id: {e}")))?,
         kind,
         target_id,
         status: serde_json::from_value(serde_json::Value::String(status))?,
@@ -1465,7 +1467,13 @@ fn check_vault_key(conn: &rusqlite::Connection, vault: &Vault) -> Result<(), Sto
             if let Some((id, kind, key_id, nonce, ciphertext)) = sample {
                 vault
                     .open(&id, &kind, key_id, &nonce, &ciphertext)
-                    .map_err(|_| StoreError::VaultKeyMismatch)?;
+                    .map_err(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "a stored secret does not open with the vault key"
+                        );
+                        StoreError::VaultKeyMismatch
+                    })?;
             }
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('vault_key_check', ?1)",

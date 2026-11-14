@@ -77,26 +77,31 @@ async fn main() -> anyhow::Result<()> {
             match client_config {
                 Some(path) => {
                     write_private(&path, &conf)?;
-                    eprintln!("client configuration written to {}", path.display());
+                    report(&format!(
+                        "client configuration written to {}",
+                        path.display()
+                    ));
                 }
-                None => println!("{conf}"),
+                None => print_config(&conf),
             }
-            eprintln!(
+            report(&format!(
                 "labpeer listening on {} — in-tunnel services at 10.99.0.1 (echo 7, discard 9, source 19, ssh banner 22, http 80, dns 53)",
                 peer.endpoint
-            );
+            ));
             for spec in &forward_tcp {
                 let (port, target) = forward_of(spec)?;
                 let net = peer.netstack().ok_or_else(|| {
                     anyhow::anyhow!("this lab peer has no netstack to forward from")
                 })?;
                 vpn_labpeer::spawn_loopback_forward(&net, port, target)?;
-                eprintln!("labpeer forwards 10.99.0.1:{port} in the tunnel to {target}");
+                report(&format!(
+                    "labpeer forwards 10.99.0.1:{port} in the tunnel to {target}"
+                ));
             }
             if let (Some(addr), Some(net)) = (api, peer.netstack()) {
                 anyhow::ensure!(addr.ip().is_loopback(), "the test API only binds loopback");
                 let listener = tokio::net::TcpListener::bind(addr).await?;
-                eprintln!("labpeer test API on http://{addr} (POST /dial)");
+                report(&format!("labpeer test API on http://{addr} (POST /dial)"));
                 tokio::spawn(serve_api(listener, net, peer.clients[0].address_v4));
             }
             tokio::signal::ctrl_c().await?;
@@ -104,6 +109,25 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// The client configuration on stdout, when no file was given for it.
+#[expect(
+    clippy::print_stdout,
+    reason = "without --client-config the configuration is the program's output, written only here"
+)]
+fn print_config(conf: &str) {
+    println!("{conf}");
+}
+
+/// What the peer serves, for the person who started it, on stderr (stdout may carry the client
+/// configuration).
+#[expect(
+    clippy::print_stderr,
+    reason = "the peer's own messages go to stderr, and only through this function"
+)]
+fn report(line: &str) {
+    eprintln!("{line}");
 }
 
 /// Two base64 lines: server private key, client private key.
@@ -202,6 +226,10 @@ async fn serve_api(
                         )
                     }
                 });
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "a client that resets or leaves ends only its own connection"
+            )]
             let _ = hyper::server::conn::http1::Builder::new()
                 .serve_connection(hyper_util::rt::TokioIo::new(stream), svc)
                 .await;

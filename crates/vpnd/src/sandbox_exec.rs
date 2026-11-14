@@ -6,7 +6,7 @@
 //! connection's tunnel), its private `/run`, `/tmp` and `/proc`, no capabilities and
 //! `no_new_privs`.
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "borrows the inherited raw file descriptors of the sandbox's terminal"
 )]
@@ -52,6 +52,8 @@ pub async fn run(
         None => Paths::default_for_user()?,
     };
     let socket = paths.sandbox_socket(&instance);
+    vpn_platform::paths::verify_socket_dir(&socket)
+        .with_context(|| format!("the sandbox socket of connection {instance} is not used"))?;
     let client = SandboxClient::connect(Path::new(&socket))
         .await
         .with_context(|| format!("no sandbox of connection {instance} ({})", socket.display()))?;
@@ -84,11 +86,11 @@ pub async fn run(
     let start = process
         .identity()
         .map_or_else(|| "unknown".into(), |id| id.start.clone());
-    eprintln!(
+    crate::output::stderr_line(format_args!(
         "sandbox-exec: connection {instance} sandbox epoch {}: pid {} (start {start})",
         client.identity().epoch,
         process.pid(),
-    );
+    ));
     Ok(match process.wait().await {
         Some(ExitStatus::Code(c)) => c,
         Some(ExitStatus::Signal(s)) => 128 + s,

@@ -3,11 +3,9 @@
 //! one connection per run created with a running intent, and a seal intent that is never
 //! withdrawn — held by the schema itself against racing writers and across reopening.
 
-// Test fixtures: a failed setup step should panic right there.
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+// Test code throughout, its helper fns too: they get clippy.toml's test exemptions, so a failed
+// setup step panics right there.
+#![cfg(test)]
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -111,7 +109,7 @@ fn spec(profile_id: ProfileId) -> InstanceSpec {
         purpose: InstancePurpose::General,
         limits: InstanceLimits::default(),
         strict: false,
-        transport: vpn_domain::TransportRef::default(),
+        transport: TransportRef::default(),
     }
 }
 

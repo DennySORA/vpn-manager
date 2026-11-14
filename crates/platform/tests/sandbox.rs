@@ -4,22 +4,39 @@
 //!
 //! Nothing here needs root or changes the host: every namespace, mount and device lives in the
 //! sandbox and is gone when its holder exits, which each test verifies.
-#![allow(
-    unsafe_code,
-    reason = "the sandbox test binary inspects fds and signals the holder via fcntl/read/kill"
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        unsafe_code,
+        reason = "the sandbox test binary inspects fds and signals the holder via fcntl/read/kill"
+    )
 )]
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
+// A `harness = false` binary is never built with `cfg(test)`, so the test exemptions of
+// clippy.toml do not reach it.
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        reason = "test fixtures of a binary that is its own harness (no cfg(test))"
+    )
 )]
+
+/// This binary's report on stdout: it is its own test harness.
+#[expect(
+    clippy::print_stdout,
+    reason = "the harness of this test binary reports on stdout, as libtest does"
+)]
+fn say(line: std::fmt::Arguments<'_>) {
+    println!("{line}");
+}
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("sandbox-holder") {
         std::process::exit(2);
     }
-    println!("sandbox tests: Linux only, skipped");
+    say(format_args!("sandbox tests: Linux only, skipped"));
 }
 
 #[cfg(target_os = "linux")]
@@ -35,7 +52,7 @@ fn main() {
         return;
     }
     if let Err(reason) = vpn_platform::sandbox::detect() {
-        println!("sandbox tests skipped: {}", reason.en);
+        say(format_args!("sandbox tests skipped: {}", reason.en));
         return;
     }
     let filter: Option<String> = std::env::args().skip(1).find(|a| !a.starts_with('-'));
@@ -51,13 +68,16 @@ fn main() {
             rt.block_on(test());
         }));
         if matches!(result, Ok(())) {
-            println!("test {name} ... ok");
+            say(format_args!("test {name} ... ok"));
         } else {
-            println!("test {name} ... FAILED");
+            say(format_args!("test {name} ... FAILED"));
             failed += 1;
         }
     }
-    println!("\nsandbox tests: {} passed; {failed} failed", ran - failed);
+    say(format_args!(
+        "\nsandbox tests: {} passed; {failed} failed",
+        ran - failed
+    ));
     if failed > 0 {
         std::process::exit(1);
     }
@@ -168,8 +188,12 @@ mod linux {
                 spec_in(&dir, Duration::from_secs(1)),
             ))
             .unwrap();
-        println!("{}", lease.holder().pid);
+        crate::say(format_args!("{}", lease.holder().pid));
         // Gone without a teardown, as a crashed or stopped manager is.
+        #[expect(
+            clippy::exit,
+            reason = "the manager vanishes without any clean-up, as a crashed or stopped one does"
+        )]
         std::process::exit(0);
     }
 
@@ -283,11 +307,10 @@ mod linux {
         let lease = SandboxLease::create(&exe(), f.spec.clone()).await.unwrap();
         // Act as the worker: read what the sandbox sends into the TUN device.
         let tun = lease.tun().unwrap();
-        // SAFETY: fcntl on a descriptor we own.
-        unsafe {
-            let flags = libc::fcntl(tun.as_raw_fd(), libc::F_GETFL);
-            libc::fcntl(tun.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
+        // SAFETY: reading the status flags of a descriptor we own.
+        let flags = unsafe { libc::fcntl(tun.as_raw_fd(), libc::F_GETFL) };
+        // SAFETY: making that descriptor non-blocking.
+        unsafe { libc::fcntl(tun.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
         // A TEST-NET address and a typical LAN address: with no route but the TUN device, the
         // SYNs can only appear there. Loopback of the host is not loopback of the sandbox.
         let (_, out) = run(
@@ -444,7 +467,7 @@ mod linux {
         assert!(gone(app).await && gone(holder.pid).await);
         assert_eq!(
             discover(Path::new(f.spec.rendezvous.parent().unwrap())),
-            Vec::<std::path::PathBuf>::new()
+            Vec::<PathBuf>::new()
         );
     }
 

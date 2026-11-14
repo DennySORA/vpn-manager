@@ -3,11 +3,9 @@
 //! latency quantiles, retention per tier, the disk quota, the raw-row bound and the status
 //! summary.
 
-// Test fixtures: a failed setup step should panic right there.
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+// Test code throughout, its helper fns too: they get clippy.toml's test exemptions, so a failed
+// setup step panics right there.
+#![cfg(test)]
 
 use vpn_domain::*;
 use vpn_store::{

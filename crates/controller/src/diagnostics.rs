@@ -28,6 +28,7 @@ fn version_triple(v: &str) -> Option<(u32, u32, u32)> {
 }
 
 fn controller_binary() -> BinaryDigest {
+    // nosemgrep: rust.lang.security.current-exe.current-exe -- only shown in the diagnostics report; the digest below is the identity
     let path = std::env::current_exe().map_or_else(|_| "vpnd".into(), |p| p.display().to_string());
     match identity::executable_sha256() {
         Ok((sha256, size)) => BinaryDigest {

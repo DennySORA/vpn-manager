@@ -32,16 +32,15 @@
 //! Nothing needs root or changes the host. A failing run still kills everything it started. The
 //! tests run one at a time: each one's cleanup kills every sandbox holder of this build.
 
-#![allow(
-    unsafe_code,
-    reason = "libc kill FFI to probe and signal the daemon processes under test"
+#![cfg(test)]
+#![cfg_attr(
+    target_os = "linux",
+    expect(
+        unsafe_code,
+        reason = "libc kill FFI to probe and signal the daemon processes under test"
+    )
 )]
 #![cfg(target_os = "linux")]
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
 
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -430,9 +429,9 @@ async fn log_until(path: &Path, from: usize, want: &str) -> (usize, String) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
     loop {
         let text = std::fs::read_to_string(path).unwrap_or_default();
-        if text.len() > from {
+        if let Some(rest) = text.get(from..) {
             let mut offset = from;
-            for line in text[from..].split_inclusive('\n') {
+            for line in rest.split_inclusive('\n') {
                 offset += line.len();
                 if line.ends_with('\n') && line.contains(want) {
                     return (offset, line.trim_end().to_owned());
@@ -768,7 +767,7 @@ async fn configure_end_to_end(
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: true,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();
@@ -1010,6 +1009,10 @@ async fn blocklist_live(
             && ended.last().map(String::as_str) == Some("cat-status=1"),
         "{ended:?}"
     );
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "only reaps the process: how its command ended is its last line, checked above"
+    )]
     let _ = held.wait().await;
     let (_, out) = stack
         .exec(
@@ -1023,18 +1026,6 @@ async fn blocklist_live(
         out.contains("ping-v6"),
         "the private fd99::1 was not listed: {out}"
     );
-    eprintln!(
-        "blocklist 192.88.99.7/32 applied live (overlay revision {}): open connection reset ({}), new one refused, fd99::1 (left out of the list) still reachable",
-        applied
-            .running
-            .as_ref()
-            .unwrap()
-            .policy
-            .as_ref()
-            .unwrap()
-            .revision,
-        ended.join(" | ")
-    );
     let applied_revision = applied
         .running
         .as_ref()
@@ -1043,6 +1034,10 @@ async fn blocklist_live(
         .as_ref()
         .unwrap()
         .revision;
+    eprintln!(
+        "blocklist 192.88.99.7/32 applied live (overlay revision {applied_revision}): open connection reset ({}), new one refused, fd99::1 (left out of the list) still reachable",
+        ended.join(" | ")
+    );
     blocklist_detached(stack, id, security_id, profile_revision, applied_revision).await;
 }
 
@@ -1417,6 +1412,10 @@ async fn leftover_sandbox_builder() {
         .pid();
     println!("LEFTOVER {} {app}", lease.holder().pid);
     // Whoever held it is gone without tearing it down.
+    #[expect(
+        clippy::exit,
+        reason = "ends as a crash would: neither the lease's teardown nor any other destructor runs"
+    )]
     std::process::exit(0);
 }
 
@@ -1804,7 +1803,7 @@ async fn configure_strict(paths: &Paths, lab: &LabPeer) -> (InstanceId, Security
             purpose: InstancePurpose::General,
             limits: InstanceLimits::default(),
             strict: true,
-            transport: vpn_domain::TransportRef::default(),
+            transport: TransportRef::default(),
         })
         .await
         .unwrap();
@@ -1914,18 +1913,29 @@ async fn udp_ask(
 
 /// SIGTERM to the manager and the controller of `stack`, and their end.
 async fn stop_stack(stack: &mut Stack) {
-    // SAFETY: SIGTERM to the processes this test started.
-    unsafe {
-        if let Some(m) = stack.manager.as_ref().and_then(Child::id) {
+    if let Some(m) = stack.manager.as_ref().and_then(Child::id) {
+        // SAFETY: SIGTERM to the manager this test started.
+        unsafe {
             libc::kill(m as libc::pid_t, libc::SIGTERM);
         }
-        if let Some(c) = stack.controller.id() {
+    }
+    if let Some(c) = stack.controller.id() {
+        // SAFETY: SIGTERM to the controller this test started.
+        unsafe {
             libc::kill(c as libc::pid_t, libc::SIGTERM);
         }
     }
     if let Some(mut m) = stack.manager.take() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a bounded wait for the end: one still running is killed when dropped (`kill_on_drop`)"
+        )]
         let _ = tokio::time::timeout(Duration::from_secs(15), m.wait()).await;
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a bounded wait for the end: one still running is killed when dropped (`kill_on_drop`)"
+    )]
     let _ = tokio::time::timeout(Duration::from_secs(15), stack.controller.wait()).await;
 }
 

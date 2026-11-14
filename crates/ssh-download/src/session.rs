@@ -57,11 +57,30 @@ pub struct Credentials {
     pub password: Option<Arc<Zeroizing<String>>>,
 }
 
+/// Shows which kinds of credential there are; the key and the password stay out of logs.
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("key", &self.key.is_some())
+            .field("password", &self.password.is_some())
+            .finish()
+    }
+}
+
 /// The Gateway to go through: its loopback port and the installation key it proves itself with.
 #[derive(Clone)]
 pub struct Gateway {
     pub port: u16,
     pub key: Arc<Zeroizing<[u8; 32]>>,
+}
+
+/// Shows the port; the installation key stays out of logs.
+impl std::fmt::Debug for Gateway {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gateway")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the job decided about the key a server presented.
@@ -197,19 +216,41 @@ pub struct Session {
     pub read_len: u32,
 }
 
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("read_len", &self.read_len)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Session {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.ssh.is_closed()
     }
 
-    /// End the connection politely (best effort).
+    /// End the connection politely (best effort: either step fails only when the connection is
+    /// gone already).
     pub async fn close(self) {
-        let _ = self.sftp.close_session();
-        let _ = self
+        if let Err(e) = self.sftp.close_session() {
+            tracing::trace!(error = %e, "SFTP session already closed");
+        }
+        if let Err(e) = self
             .ssh
             .disconnect(russh::Disconnect::ByApplication, "", "")
-            .await;
+            .await
+        {
+            tracing::trace!(error = %e, "SSH connection already gone");
+        }
+    }
+}
+
+/// Close a remote file or folder handle. Best effort: what was read through it is decided
+/// already, and a handle the server still keeps goes with the connection.
+pub(crate) async fn close_handle(sftp: &RawSftpSession, handle: String) {
+    if let Err(e) = sftp.close(handle).await {
+        tracing::debug!(error = %e, "remote handle not closed");
     }
 }
 

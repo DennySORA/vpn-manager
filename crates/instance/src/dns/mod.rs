@@ -185,6 +185,12 @@ pub struct DnsResolver<C: TunnelConnector> {
     inner: Arc<Inner<C>>,
 }
 
+impl<C: TunnelConnector> std::fmt::Debug for DnsResolver<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DnsResolver").finish_non_exhaustive()
+    }
+}
+
 impl<C: TunnelConnector> DnsResolver<C> {
     pub fn new(connector: C, config: DnsConfig, counters: Arc<DnsCounters>) -> Self {
         let fail_closed = config.on_failure == DnsOnFailure::Fail;
@@ -242,10 +248,11 @@ impl<C: TunnelConnector> DnsResolver<C> {
     /// fallback) answer with anything but NOERROR or the exchange fails.
     pub async fn probe(&self) -> Result<ProbeOk, ResolveError> {
         let inner = &*self.inner;
+        // Never closed: the only refusal is that a probe holds the permit.
         let _probe = inner
             .probes
             .try_acquire()
-            .map_err(|_| ResolveError::Overloaded)?;
+            .map_err(|_no_permit| ResolveError::Overloaded)?;
         let start = Instant::now();
         let q = Question::new(&Name::root(), RecordType::NS);
         match ask_root(&inner.upstreams, &q, start + inner.timeout, inner.timeout).await {
@@ -547,7 +554,8 @@ impl<C: TunnelConnector> Inner<C> {
     }
 
     fn admit(&self) -> Result<SemaphorePermit<'_>, ResolveError> {
-        self.permits.try_acquire().map_err(|_| {
+        // Never closed: the only refusal is that every permit is taken.
+        self.permits.try_acquire().map_err(|_no_permit| {
             self.counters.overloaded.fetch_add(1, Ordering::Relaxed);
             ResolveError::Overloaded
         })

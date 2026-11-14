@@ -1,0 +1,16 @@
+# taplo (TOML format and syntax check): the style the files already have. No schema is fetched.
+exclude = ["vendor/**", "target/**", "web/node_modules/**", "scripts/.venv/**"]
+
+[formatting]
+indent_string = "    "
+column_width = 100
+inline_table_expand = false
+# Multi-line arrays stay as they are written (uv writes its own that way).
+array_auto_collapse = false
+
+# The scripts owner (Python) indents its arrays by two spaces.
+[[rule]]
+include = ["scripts/pyproject.toml"]
+
+[rule.formatting]
+indent_string = "  "

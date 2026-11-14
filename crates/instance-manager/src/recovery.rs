@@ -44,9 +44,9 @@ use vpn_platform::process::{self, KillOutcome, ProcessIdentity};
 use vpn_platform::sandbox::{self as strict, SandboxClient, SandboxLease};
 use vpn_store::Store;
 
-use crate::Manager;
 use crate::inventory::{LiveWorker, WorkerRecord};
 use crate::resolve::key_fingerprint;
+use crate::{Manager, remove_file_if_present};
 
 /// Most directory entries looked at per directory.
 const SCAN_MAX: usize = 4096;
@@ -93,6 +93,16 @@ pub struct Inspection {
     gaps: Vec<ScanGap>,
 }
 
+impl std::fmt::Debug for Inspection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inspection")
+            .field("resources", &self.resources)
+            .field("found", &self.found.len())
+            .field("gaps", &self.gaps.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Inspection {
     #[must_use]
     pub fn report(&self) -> RecoveryReport {
@@ -127,14 +137,15 @@ fn item_id(parts: &[&str]) -> String {
         h.update(p.as_bytes());
         h.update(b"\0");
     }
-    hex::encode(h.finalize())[..16].to_string()
+    // The first 8 bytes of the 32-byte digest: 16 hex digits.
+    hex::encode(&h.finalize()[..8])
 }
 
 fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "one constructor for every recovery item: each argument is one field of the item, named at the call"
 )]
@@ -219,7 +230,7 @@ fn gap(what: impl Into<Text>, path: Option<&Path>, reason: impl Into<Text>) -> S
 
 /// The pid of the process that wrote a temporary name of an atomic write: `…tmp-<pid>[-…]`.
 fn temp_pid(name: &str) -> Option<u32> {
-    let rest = &name[name.rfind("tmp-")? + 4..];
+    let (_, rest) = name.rsplit_once("tmp-")?;
     rest.split('-').next()?.parse().ok()
 }
 
@@ -1236,7 +1247,7 @@ async fn kill_worker(identity: &ProcessIdentity, record: &Path) -> (ReconcileOut
     match process::kill_verified(identity) {
         Ok(KillOutcome::Killed) => {
             let ended = wait_ended(identity).await;
-            let _ = std::fs::remove_file(record);
+            remove_file_if_present(record);
             if ended {
                 (
                     ReconcileOutcome::Done,
@@ -1258,7 +1269,7 @@ async fn kill_worker(identity: &ProcessIdentity, record: &Path) -> (ReconcileOut
             }
         }
         Ok(KillOutcome::Gone) => {
-            let _ = std::fs::remove_file(record);
+            remove_file_if_present(record);
             (
                 ReconcileOutcome::Done,
                 tr!(
@@ -1269,7 +1280,7 @@ async fn kill_worker(identity: &ProcessIdentity, record: &Path) -> (ReconcileOut
             )
         }
         Ok(KillOutcome::NotOurs) => {
-            let _ = std::fs::remove_file(record);
+            remove_file_if_present(record);
             (
                 ReconcileOutcome::Skipped,
                 tr!(

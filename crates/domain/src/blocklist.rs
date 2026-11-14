@@ -469,7 +469,9 @@ fn entry(token: &str, mapped: &mut bool) -> Result<Entry, LineProblem> {
         Some((a, p)) => (a, Some(p)),
         None => (token, None),
     };
-    let ip: IpAddr = addr.parse().map_err(|_| {
+    // An `AddrParseError` says only "not an IP address"; the token itself tells which kind of
+    // wrong entry it is.
+    let ip: IpAddr = addr.parse().map_err(|_not_an_ip| {
         let range = token
             .split_once('-')
             .is_some_and(|(a, b)| a.parse::<IpAddr>().is_ok() && b.parse::<IpAddr>().is_ok());
@@ -539,6 +541,10 @@ fn json_line(line: &str) -> Result<Option<String>, LineProblem> {
     if line.len() > MAX_ROW_CHARS {
         return Err(LineProblem::JsonTooLong);
     }
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "an invalid line is reported as one fixed, translated reason next to its excerpt; the JSON parser's message is not part of that report"
+    )]
     let row: Row = serde_json::from_str(line).map_err(|_| LineProblem::NotJson)?;
     match (row.cidr, row.kind) {
         (Some(serde_json::Value::String(cidr)), _) => Ok(Some(cidr)),
@@ -564,7 +570,10 @@ fn tab_row(row: &str) -> Result<String, LineProblem> {
     if prefix.is_empty() || prefix.len() > 3 || !prefix.bytes().all(|b| b.is_ascii_digit()) {
         return Err(LineProblem::BadRowMask);
     }
-    let prefix: u8 = prefix.parse().map_err(|_| LineProblem::BadRowMask)?;
+    // One to three digits: the only error left is a value over 255, which `BadRowMask` reports.
+    let prefix: u8 = prefix
+        .parse()
+        .map_err(|_over_255| LineProblem::BadRowMask)?;
     let exact = match (start, end) {
         (IpAddr::V4(s), IpAddr::V4(e)) if prefix <= 32 => {
             v4_range(s, prefix) == (u32::from(s), u32::from(e))
@@ -791,9 +800,9 @@ pub fn parse_https_url(input: &str) -> Result<HttpsUrl, Text> {
         ));
     }
     let Some(rest) = s
-        .get(..8)
-        .filter(|p| p.eq_ignore_ascii_case("https://"))
-        .map(|_| &s[8..])
+        .split_at_checked(8)
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("https://"))
+        .map(|(_, rest)| rest)
     else {
         return Err(tr!(
             "Only https:// URLs are accepted",

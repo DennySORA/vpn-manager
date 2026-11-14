@@ -1,6 +1,6 @@
 //! Private state and runtime directories. Created with mode 0700; refused when they are symlinks,
 //! owned by another user or writable by group/others.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "path ownership checks compare against getuid(2)"
 )]
@@ -80,6 +80,7 @@ impl Paths {
             reason = "the directory name keeps the low 32 bits of the hash on purpose"
         )]
         let tag = h.finish() as u32;
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir -- the manager makes it private (`ensure_private_dir`) and every client checks it (`verify_socket_dir`) before use
         self.run = std::env::temp_dir().join(format!("vpnm-{uid}-{tag:08x}"));
         self
     }
@@ -215,6 +216,49 @@ impl Paths {
 
 /// Create (if missing) and verify a private directory.
 ///
+/// Check, without creating or changing anything, that the directory holding `socket` is this
+/// user's own: a real directory (not a symlink), owned by this user and writable by nobody else,
+/// so every socket in it was put there by this user. A client calls this before it connects there,
+/// so a directory another account created first is never trusted: the run directory can be in the shared temporary directory (see
+/// `with_short_run_dir`), where anyone may create a directory of that name. A directory that does
+/// not exist passes: there is nothing to connect to, and the connect fails on its own.
+///
+/// # Errors
+///
+/// The directory is a symlink or not a directory, is owned by another user, is writable by group
+/// or others, or cannot be inspected.
+pub fn verify_socket_dir(socket: &Path) -> std::io::Result<()> {
+    let Some(dir) = socket.parent() else {
+        return Ok(());
+    };
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(std::io::Error::other(format!(
+            "{} must be a real directory, not a symlink",
+            dir.display()
+        )));
+    }
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    if meta.uid() != uid {
+        return Err(std::io::Error::other(format!(
+            "{} is owned by another user",
+            dir.display()
+        )));
+    }
+    if meta.mode() & 0o022 != 0 {
+        return Err(std::io::Error::other(format!(
+            "{} is writable by group or others",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
 /// # Errors
 ///
 /// Fails when the path is a symlink or not a directory, is owned by another user, is open to group
@@ -246,5 +290,45 @@ pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A client trusts the directory of a socket only when it is this user's own and nobody else
+    /// can write in it.
+    #[test]
+    fn a_client_trusts_only_a_directory_only_it_can_write() {
+        let base = tempfile::tempdir().unwrap();
+        let private = base.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let readable = base.path().join("readable");
+        std::fs::create_dir(&readable).unwrap();
+        std::fs::set_permissions(&readable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let group = base.path().join("group");
+        std::fs::create_dir(&group).unwrap();
+        std::fs::set_permissions(&group, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let others = base.path().join("others");
+        std::fs::create_dir(&others).unwrap();
+        std::fs::set_permissions(&others, std::fs::Permissions::from_mode(0o703)).unwrap();
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&private, &link).unwrap();
+        let file = base.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        for (dir, trusted) in [
+            (private.as_path(), true),
+            (readable.as_path(), true),
+            (group.as_path(), false),
+            (others.as_path(), false),
+            (link.as_path(), false),
+            (file.as_path(), false),
+            (base.path().join("missing").as_path(), true),
+        ] {
+            let got = verify_socket_dir(&dir.join("api.sock"));
+            assert_eq!(got.is_ok(), trusted, "{}: {got:?}", dir.display());
+        }
     }
 }

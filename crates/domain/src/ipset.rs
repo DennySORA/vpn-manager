@@ -424,7 +424,7 @@ impl<'de> Deserialize<'de> for IpRangeSet {
         }
         let bytes = B64
             .decode(text.as_bytes())
-            .map_err(|_| serde::de::Error::custom(DecodeError::Format))?;
+            .map_err(|e| serde::de::Error::custom(format_args!("{}: {e}", DecodeError::Format)))?;
         Self::decode(&bytes, MAX_ENCODED_BYTES).map_err(serde::de::Error::custom)
     }
 }

@@ -2,7 +2,7 @@
 //! HTTP/1.1 server and the [`Connect`] the client dials through. Every connection is an
 //! in-memory duplex pipe: nothing touches a socket, a resolver or the network.
 
-#![allow(dead_code, reason = "each test binary uses a different part")]
+#![expect(dead_code, reason = "each test binary uses a different part")]
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
@@ -329,6 +329,10 @@ async fn serve(
             reply.into_response().await
         }
     });
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the client ends the connection when it is done or gives up; the tests check what the client saw"
+    )]
     let _ = hyper::server::conn::http1::Builder::new()
         .serve_connection(TokioIo::new(tls), service)
         .await;

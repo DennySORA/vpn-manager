@@ -260,10 +260,16 @@ pub(super) async fn refuse(stream: TcpStream, code: u8) {
     if stream.write_all(&reply(code, UNSPECIFIED)).await.is_err() {
         return;
     }
-    let _ = stream.shutdown().await;
+    // A client that is already gone cannot be shut down; nothing is lost.
+    if let Err(e) = stream.shutdown().await {
+        tracing::trace!(error = %e, "SOCKS5 refusal: client connection not shut down");
+    }
     let mut sink = [0u8; 1024];
     let drain = async { while matches!(stream.read(&mut sink).await, Ok(n) if n > 0) {} };
-    let _ = tokio::time::timeout(LINGER, drain).await;
+    // Closed either way once the linger is over.
+    if tokio::time::timeout(LINGER, drain).await.is_err() {
+        tracing::trace!("SOCKS5 refusal: client still sending after the linger");
+    }
 }
 
 /// `ATYP ADDR PORT` with IPv4-mapped IPv6 addresses written as IPv4.

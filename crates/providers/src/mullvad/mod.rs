@@ -62,7 +62,7 @@ const INVALID_ACCESS_TOKEN: &str = "INVALID_ACCESS_TOKEN";
 const DEVICE_NOT_FOUND: &str = "DEVICE_NOT_FOUND";
 
 /// Mullvad API client pinned to one address family.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Mullvad<C> {
     http: HttpsClient<C>,
     family: Family,
@@ -237,7 +237,7 @@ impl<C: Connect> Mullvad<C> {
         let request = self.request(Method::GET, RELAYS_PATH).limit(CATALOG_LIMIT);
         let response = self.send(request).await?;
         expect(&response, StatusCode::OK)?;
-        relays::parse_catalog(&response.body)
+        parse_catalog(&response.body)
     }
 
     /// `GET /www/relays/wireguard/` (public, no token): each relay's multihop port.
@@ -251,7 +251,7 @@ impl<C: Connect> Mullvad<C> {
             .limit(CATALOG_LIMIT);
         let response = self.send(request).await?;
         expect(&response, StatusCode::OK)?;
-        relays::parse_multihop(&response.body)
+        parse_multihop(&response.body)
     }
 
     fn request(&self, method: Method, path: impl Into<String>) -> Request {

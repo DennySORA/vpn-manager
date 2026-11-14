@@ -9,7 +9,7 @@
 //!
 //! Supported on macOS (`proc_pidinfo`) and Linux (`/proc`). Elsewhere the by-pid calls return
 //! `Unsupported` and `sample_self` reports CPU time only.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "resource sampling calls getrusage/sysconf (Linux) and proc_pidinfo/sysctlbyname/mach_timebase_info (macOS) via libc"
 )]
@@ -222,8 +222,8 @@ pub(crate) mod macos {
     fn pidinfo<T>(pid: i32, flavor: i32, arg: u64) -> io::Result<T> {
         // SAFETY: an all-zero bit pattern is valid for the plain C structs used here.
         let mut out: T = unsafe { std::mem::zeroed() };
-        let size = i32::try_from(std::mem::size_of::<T>())
-            .map_err(|_| io::Error::other("proc_pidinfo struct out of range"))?;
+        let size = i32::try_from(size_of::<T>())
+            .map_err(|_out_of_range| io::Error::other("proc_pidinfo struct out of range"))?;
         // SAFETY: pointer and size describe `out`.
         let n = unsafe {
             libc::proc_pidinfo(
@@ -252,7 +252,8 @@ pub(crate) mod macos {
     }
 
     pub fn identity(pid: u32) -> io::Result<ProcessIdentity> {
-        let pid_i = i32::try_from(pid).map_err(|_| io::Error::other("pid out of range"))?;
+        let pid_i =
+            i32::try_from(pid).map_err(|_out_of_range| io::Error::other("pid out of range"))?;
         let b = bsd_info(pid_i)?;
         Ok(ProcessIdentity {
             pid,
@@ -266,7 +267,7 @@ pub(crate) mod macos {
     /// `proc_taskinfo` CPU times are Mach absolute time units (equal to nanoseconds on Intel,
     /// 125/3 ns per unit on Apple silicon). libc marks the timebase call deprecated in favour of
     /// the `mach2` crate; it is the same stable libSystem function, so no extra dependency.
-    #[allow(
+    #[expect(
         deprecated,
         reason = "libc points to the `mach2` crate for the same stable libSystem call"
     )]
@@ -287,7 +288,7 @@ pub(crate) mod macos {
     }
 
     fn fd_count(pid: i32, hint: u32) -> Option<u32> {
-        let entry = std::mem::size_of::<libc::proc_fdinfo>();
+        let entry = size_of::<libc::proc_fdinfo>();
         // Room for the count the kernel reported plus a margin for descriptors opened since.
         let slots = (hint as usize).saturating_add(64).min(1 << 20);
         let mut buf: Vec<libc::proc_fdinfo> = Vec::with_capacity(slots);
@@ -307,7 +308,8 @@ pub(crate) mod macos {
     }
 
     pub fn sample(pid: u32) -> io::Result<ProcessSample> {
-        let pid_i = i32::try_from(pid).map_err(|_| io::Error::other("pid out of range"))?;
+        let pid_i =
+            i32::try_from(pid).map_err(|_out_of_range| io::Error::other("pid out of range"))?;
         let b = bsd_info(pid_i)?;
         let t = task_info(pid_i)?;
         // The identity is read before and after: a pid that changed hands in between is refused.
@@ -370,7 +372,7 @@ pub(crate) mod macos {
     pub fn sysctl_u64(name: &str) -> Option<u64> {
         let cname = std::ffi::CString::new(name).ok()?;
         let mut v: u64 = 0;
-        let mut len: libc::size_t = std::mem::size_of::<u64>();
+        let mut len: libc::size_t = size_of::<u64>();
         // SAFETY: `v` holds `len` bytes.
         let r = unsafe {
             libc::sysctlbyname(
@@ -381,7 +383,7 @@ pub(crate) mod macos {
                 0,
             )
         };
-        (r == 0 && len == std::mem::size_of::<u64>()).then_some(v)
+        (r == 0 && len == size_of::<u64>()).then_some(v)
     }
 }
 
@@ -420,7 +422,7 @@ pub(crate) mod linux {
     /// `utime`, `stime` and `starttime` (clock ticks) from `/proc/<pid>/stat`. The command name
     /// may contain spaces and parentheses: fields are counted after its last `)`.
     pub fn parse_stat(stat: &str) -> Option<(u64, u64, u64)> {
-        let rest = &stat[stat.rfind(')')? + 1..];
+        let (_, rest) = stat.rsplit_once(')')?;
         let f: Vec<&str> = rest.split_whitespace().collect();
         // rest[0] is field 3 (state): utime is field 14, stime 15, starttime 22.
         Some((

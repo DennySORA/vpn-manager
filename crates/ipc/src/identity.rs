@@ -23,7 +23,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn build_id() -> &'static str {
     BUILD_ID.get_or_init(|| {
         let digest = executable_sha256().map_or_else(|_| "unknown".into(), |(d, _)| d.to_string());
-        format!("{VERSION}+{}", &digest[..digest.len().min(16)])
+        // Hex digits or "unknown", both ASCII: the first 16 characters, or all of a shorter text.
+        format!("{VERSION}+{}", digest.get(..16).unwrap_or(&digest))
     })
 }
 
@@ -45,6 +46,7 @@ fn executable_digest_now() -> std::io::Result<(String, u64)> {
     #[cfg(target_os = "linux")]
     let path = std::path::PathBuf::from("/proc/self/exe");
     #[cfg(not(target_os = "linux"))]
+    // nosemgrep: rust.lang.security.current-exe.current-exe -- macOS has no /proc/self/exe; the digest is taken once at start-up, before anything could replace the file
     let path = std::env::current_exe()?;
     file_sha256(&path)
 }
@@ -91,7 +93,7 @@ pub const GATEWAY_MARK_SSH_PULL: u8 = 0x82;
 #[must_use]
 pub fn gateway_proof(key: &[u8; 32], nonce: &[u8; 32]) -> [u8; 32] {
     use hmac::{Hmac, KeyInit, Mac};
-    type HmacSha256 = Hmac<sha2::Sha256>;
+    type HmacSha256 = Hmac<Sha256>;
     let Ok(mut mac) = HmacSha256::new_from_slice(key) else {
         return [0; 32];
     };

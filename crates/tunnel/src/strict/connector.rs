@@ -20,7 +20,7 @@
 //! whose UDP goes straight to the App (`udp_direct`) holds no socket for it: the port is
 //! registered with the packet filter as a direct port instead ([`DirectUdpPort`]).
 
-#![allow(
+#![expect(
     unsafe_code,
     reason = "kernel sockets in the sandbox namespace: libc socket options, fcntl, listen and OwnedFd adoption of fresh descriptors"
 )]
@@ -92,6 +92,9 @@ fn abort_fd(fd: RawFd) {
             (&raw const linger).cast(),
             socklen::<libc::linger>(),
         );
+    }
+    // SAFETY: shutdown takes only the descriptor and a flag; it touches no memory of ours.
+    unsafe {
         libc::shutdown(fd, libc::SHUT_RDWR);
     }
 }
@@ -118,6 +121,12 @@ struct Inner {
 #[derive(Clone)]
 pub struct KernelConnector {
     inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for KernelConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KernelConnector").finish_non_exhaustive()
+    }
 }
 
 /// Keeps one flow counted, registered and resettable; undoes all of it when dropped.
@@ -170,7 +179,7 @@ fn check_destination(dst: SocketAddr) -> io::Result<()> {
     reason = "only used for socket option values of a few bytes"
 )]
 const fn socklen<T>() -> libc::socklen_t {
-    std::mem::size_of::<T>() as libc::socklen_t
+    size_of::<T>() as libc::socklen_t
 }
 
 /// Set an integer socket option.
@@ -202,11 +211,18 @@ fn dup(fd: RawFd) -> io::Result<OwnedFd> {
 fn tune(fd: RawFd, tuning: &FlowTuning) -> Option<String> {
     let idle = i32::try_from(tuning.tcp_keepalive.as_secs().max(1)).unwrap_or(i32::MAX);
     let user_timeout = i32::try_from(tuning.tcp_dead_peer_timeout.as_millis()).unwrap_or(i32::MAX);
-    let _ = setsockopt_int(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
-    let _ = setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, idle);
-    let _ = setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, idle);
-    let _ = setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 5);
-    let _ = setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, user_timeout);
+    let liveness = [
+        (libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1),
+        (libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, idle),
+        (libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, idle),
+        (libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 5),
+        (libc::IPPROTO_TCP, libc::TCP_USER_TIMEOUT, user_timeout),
+    ];
+    for (level, name, value) in liveness {
+        if let Err(e) = setsockopt_int(fd, level, name, value) {
+            tracing::debug!(option = name, error = %e, "tcp keep-alive option not set");
+        }
+    }
     // Refused where the kernel does not offer the algorithm to unprivileged programs (BBR
     // outside `tcp_allowed_congestion_control`): the flow then keeps the namespace's own, which
     // is what the answer read back says.
@@ -222,6 +238,14 @@ fn tune(fd: RawFd, tuning: &FlowTuning) -> Option<String> {
         );
     }
     congestion_of(fd)
+}
+
+/// Nagle's algorithm as the transport wants it on a connected stream. Best effort like
+/// [`tune`]: a failure leaves the kernel's default in place.
+fn set_nagle(stream: &TcpStream, tuning: &FlowTuning) {
+    if let Err(e) = stream.set_nodelay(!tuning.nagle) {
+        tracing::debug!(error = %e, "TCP_NODELAY not set");
+    }
 }
 
 /// The congestion control a TCP socket runs (`TCP_CONGESTION`), `None` when it cannot be read.
@@ -487,7 +511,7 @@ impl KernelConnector {
         };
         // The handshake is one round trip: what the next connections are tuned for.
         self.inner.transport.record_handshake(sent.elapsed());
-        let _ = stream.set_nodelay(!tuning.nagle);
+        set_nagle(&stream, &tuning);
         self.inner
             .stats
             .tcp_connects
@@ -531,7 +555,7 @@ impl KernelConnector {
         );
         let (tuning, _) = self.inner.transport.select();
         self.tune(stream.as_raw_fd(), &tuning);
-        let _ = stream.set_nodelay(!tuning.nagle);
+        set_nagle(&stream, &tuning);
         Ok(KernelStream {
             stream,
             peer,
@@ -592,6 +616,15 @@ pub struct KernelStream {
     _lease: Lease,
 }
 
+impl std::fmt::Debug for KernelStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KernelStream")
+            .field("peer", &self.peer)
+            .field("local", &self.local)
+            .finish_non_exhaustive()
+    }
+}
+
 impl InboundStream for KernelStream {
     fn peer_addr(&self) -> SocketAddr {
         self.peer
@@ -642,6 +675,15 @@ pub struct KernelDatagram {
     local_v4: Option<Ipv4Addr>,
     local_v6: Option<Ipv6Addr>,
     _lease: Lease,
+}
+
+impl std::fmt::Debug for KernelDatagram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KernelDatagram")
+            .field("local_v4", &self.local_v4)
+            .field("local_v6", &self.local_v6)
+            .finish_non_exhaustive()
+    }
 }
 
 impl KernelDatagram {
@@ -734,6 +776,14 @@ pub struct KernelPort {
     _held: FlowGuard,
 }
 
+impl std::fmt::Debug for KernelPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KernelPort")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The TCP sockets of a reserved port and how many listeners are open on them.
 struct TcpHold {
     sockets: Vec<(FlowKey, OwnedFd)>,
@@ -748,6 +798,14 @@ pub struct KernelListener {
     v4: Option<TcpListener>,
     v6: Option<TcpListener>,
     listening: Option<ListenGuard>,
+}
+
+impl std::fmt::Debug for KernelListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KernelListener")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for KernelListener {
@@ -1096,9 +1154,7 @@ mod tests {
         );
 
         // A connection from inside the sandbox (its loopback) is reset, never handed over.
-        let mut inside = tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .unwrap();
+        let mut inside = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         let accepted = tokio::time::timeout(Duration::from_millis(300), listener.accept()).await;
         assert!(accepted.is_err(), "nothing from inside is accepted");
         let mut buf = [0u8; 1];
@@ -1115,11 +1171,7 @@ mod tests {
             k.inner.own.admits_inbound(&key, true),
             Some(OwnInbound::Pass)
         );
-        assert!(
-            tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_ok()
-        );
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
         drop(next);
         drop(datagrams);
         assert_eq!(

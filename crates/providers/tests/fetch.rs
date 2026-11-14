@@ -2,10 +2,7 @@
 //! connector, family and port; certificate verification; same-origin redirects only; status,
 //! encoding and size limits; one deadline.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 mod support;
 

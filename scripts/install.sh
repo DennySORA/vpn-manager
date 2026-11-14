@@ -5,7 +5,7 @@
 #
 # Options go after `sh -s --`:
 #
-#   ... | sh -s -- --version 0.1.0          a given release instead of the latest
+#   ... | sh -s -- --version 0.2.0          a given release instead of the latest
 #   ... | sh -s -- --port 18765             anything else is passed to `vpn-installer install`
 #
 # What it does: finds this machine's installer in the release (vpn-installer-<version>-<os>-<arch>,
@@ -89,7 +89,7 @@ main() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --version)
-        [ "$#" -ge 2 ] || die "--version needs a value, for example --version 0.1.0"
+        [ "$#" -ge 2 ] || die "--version needs a value, for example --version 0.2.0"
         version=$2
         shift 2
         ;;

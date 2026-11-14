@@ -4,6 +4,8 @@
 //! manager lease names). Everything else goes into the tunnel. Checked on the source, so a new
 //! host socket cannot slip in unnoticed.
 
+#![cfg(test)]
+
 use std::path::Path;
 
 /// Calls that open a host socket (or ask the host resolver). Adopting a descriptor the manager

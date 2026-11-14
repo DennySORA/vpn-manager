@@ -2,7 +2,7 @@
 //! this user's processes; Linux: /proc/net/tcp{,6}).
 
 #![cfg(any(target_os = "macos", target_os = "linux"))]
-#![allow(
+#![expect(
     clippy::unwrap_used,
     reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
 )]

@@ -34,8 +34,9 @@ fn digest_line(name: &str, d: &BinaryDigest) -> String {
     )
 }
 
+/// The first 16 hex digits (all of a shorter text).
 fn short_sha(s: &str) -> String {
-    format!("sha256:{}…", &s[..s.len().min(16)])
+    format!("sha256:{}…", s.get(..16).unwrap_or(s))
 }
 
 pub async fn run(ctx: &Ctx) -> CmdResult {

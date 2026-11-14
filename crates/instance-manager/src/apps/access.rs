@@ -223,9 +223,11 @@ impl AccessPorts {
             touched.push(port.app);
             port.cancel.cancel();
             let task = port.task.lock().take();
-            if let Some(task) = task {
-                // Its listener is closed once the task is gone: a new one may take the port.
-                let _ = task.await;
+            // Its listener is closed once the task is gone: a new one may take the port.
+            if let Some(task) = task
+                && let Err(e) = task.await
+            {
+                tracing::warn!(app = %port.app, error = %e, "access port task failed");
             }
             tracing::info!(app = %port.app, port = port.listening_on, "access port released");
         }
@@ -621,10 +623,15 @@ async fn unavailable(mut stream: TcpStream, why: &Text) {
             "HTTP/1.1 503 Service Unavailable\r\ncontent-type: text/plain; charset=utf-8\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\nretry-after: 5\r\n\r\n{body}",
             body.len()
         );
-        let _ = stream.write_all(resp.as_bytes()).await;
+        // Best effort: a client that left gets nothing.
+        if let Err(e) = stream.write_all(resp.as_bytes()).await {
+            tracing::trace!(error = %e, "unserved client not told why");
+        }
         // Lingering close: FIN first, then drain what the client already sent (closing with
         // unread input sends a reset, and the client would lose the answer).
-        let _ = stream.shutdown().await;
+        if let Err(e) = stream.shutdown().await {
+            tracing::trace!(error = %e, "unserved client's connection not shut down");
+        }
         let mut sink = [0u8; 4096];
         let drain = async {
             let mut total = 0usize;
@@ -635,6 +642,8 @@ async fn unavailable(mut stream: TcpStream, why: &Text) {
                 total += n;
             }
         };
-        let _ = tokio::time::timeout(PEEK, drain).await;
+        if tokio::time::timeout(PEEK, drain).await.is_err() {
+            tracing::trace!("unserved client still sending: closed");
+        }
     }
 }

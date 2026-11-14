@@ -11,10 +11,7 @@
 //!   before any provider request, and a request after it exists gets it back (started again);
 //! - the durable promotion is abandoned, with its reason shown, when its connection is stopped.
 
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap in tests, but not in helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -164,7 +161,7 @@ fn spec(name: &str, profile_id: ProfileId) -> InstanceSpec {
         purpose: InstancePurpose::General,
         limits: InstanceLimits::default(),
         strict: false,
-        transport: vpn_domain::TransportRef::default(),
+        transport: TransportRef::default(),
     }
 }
 
@@ -448,6 +445,10 @@ async fn a_seal_whose_commit_failed_is_committed_by_the_promotion() {
     assert!(f.manager.bootstrap().revoke().is_some());
     refuse_seal_commits(&f.paths, true);
     let mut promoter = vpn_controller::egress::Promoter::default();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the Store refuses the seal's commit on purpose here; what the step leaves behind is checked next"
+    )]
     let _ = vpn_controller::egress::step(&f.providers, &f.link, &mut promoter).await;
     let s = egress(&f.app).await;
     assert_eq!(s.bootstrap.as_ref().unwrap().stage, BootstrapStage::Sealing);

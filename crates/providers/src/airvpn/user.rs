@@ -249,7 +249,7 @@ pub struct Device {
 }
 
 pub fn parse_user(xml: &str) -> Result<UserInfo, ProviderError> {
-    let doc = Document::parse(xml).map_err(|_| account_drift())?;
+    let doc = Document::parse(xml).map_err(|_malformed| account_drift())?;
     let user = doc.root();
     // Eddie `FetchUrls`: an `error` on the document element is the server's refusal.
     if user.raw("error").is_some() {

@@ -1,10 +1,6 @@
 //! The browser boundary without login: only this machine, only this origin.
 
-// Test fixtures: a failed setup step should panic right there.
-#![allow(
-    clippy::unwrap_used,
-    reason = "test fixtures: clippy.toml allows unwrap/expect in #[test] fns, not in the helper fns of a tests/ crate"
-)]
+#![cfg(test)]
 
 use std::sync::Arc;
 

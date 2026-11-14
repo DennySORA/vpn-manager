@@ -4,7 +4,7 @@
 //! A worker gets exactly one inherited descriptor besides stdio: its private control socket as
 //! fd 3. Every other descriptor is closed in the child before `exec`, so no listener, database,
 //! lock or socket of the manager leaks into the worker.
-#![allow(
+#![expect(
     unsafe_code,
     reason = "this module owns process spawn: pre-exec fd setup, setns, signals and process lookups via libc"
 )]
@@ -117,39 +117,50 @@ where
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
         )
         .kill_on_drop(true);
-    // SAFETY: the closure runs in the forked child before exec and only calls
-    // async-signal-safe functions (dup2, fcntl, write, close_range, getdtablesize, setns, prctl,
-    // capset).
-    unsafe {
-        cmd.pre_exec(move || {
-            if raw == CONTROL_FD {
-                // Already at fd 3: just clear close-on-exec.
-                let flags = libc::fcntl(CONTROL_FD, libc::F_GETFD);
-                libc::fcntl(CONTROL_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-            } else if libc::dup2(raw, CONTROL_FD) < 0 {
+    let before_exec = move || -> std::io::Result<()> {
+        if raw == CONTROL_FD {
+            // Already at fd 3: just clear close-on-exec.
+            // SAFETY: fcntl(F_GETFD) only reads the flags of fd 3, the control socket.
+            let flags = unsafe { libc::fcntl(CONTROL_FD, libc::F_GETFD) };
+            // SAFETY: fcntl(F_SETFD) only clears close-on-exec of fd 3.
+            unsafe { libc::fcntl(CONTROL_FD, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
+        } else {
+            // SAFETY: dup2 copies the control socket, which the parent keeps open across the
+            // spawn, onto fd 3.
+            let copied = unsafe { libc::dup2(raw, CONTROL_FD) };
+            if copied < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            if let Some(fd) = cgroup_procs {
-                // "0" moves the writing process, before any namespace changes. A failure is
-                // seen by the caller's check.
-                libc::write(fd, b"0".as_ptr().cast(), 1);
+        }
+        if let Some(fd) = cgroup_procs {
+            // "0" moves the writing process, before any namespace changes. A failure is seen by
+            // the caller's check.
+            // SAFETY: write(2) of one byte from a static buffer to a descriptor the parent keeps
+            // open across the spawn.
+            unsafe { libc::write(fd, b"0".as_ptr().cast(), 1) };
+        }
+        cloexec_from(CONTROL_FD + 1);
+        #[cfg(target_os = "linux")]
+        if let Some((user, net, cap_last)) = entry {
+            // The user namespace first: it grants the right to join its network namespace.
+            // SAFETY: setns with the sandbox's user namespace descriptor, open across the spawn.
+            if unsafe { libc::setns(user, libc::CLONE_NEWUSER) } < 0 {
+                return Err(std::io::Error::last_os_error());
             }
-            cloexec_from(CONTROL_FD + 1);
-            #[cfg(target_os = "linux")]
-            if let Some((user, net, cap_last)) = entry {
-                // The user namespace first: it grants the right to join its network namespace.
-                if libc::setns(user, libc::CLONE_NEWUSER) < 0
-                    || libc::setns(net, libc::CLONE_NEWNET) < 0
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
-                crate::sandbox::caps_drop_all(cap_last)?;
+            // SAFETY: setns with the sandbox's network namespace descriptor, open across the
+            // spawn.
+            if unsafe { libc::setns(net, libc::CLONE_NEWNET) } < 0 {
+                return Err(std::io::Error::last_os_error());
             }
-            #[cfg(not(target_os = "linux"))]
-            let _ = entry;
-            Ok(())
-        });
-    }
+            crate::sandbox::caps_drop_all(cap_last)?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = entry;
+        Ok(())
+    };
+    // SAFETY: the closure runs in the forked child before exec and only calls async-signal-safe
+    // functions (dup2, fcntl, write, close_range, getdtablesize, setns, prctl, capset).
+    unsafe { cmd.pre_exec(before_exec) };
     let child = cmd.spawn()?;
     drop(control);
     Ok(child)
@@ -180,11 +191,10 @@ pub(crate) fn cloexec_from(first: i32) {
     let max = unsafe { libc::getdtablesize() }.max(first);
     for fd in first..max {
         // SAFETY: fcntl on a possibly-unused descriptor number only fails with EBADF.
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
-                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
-            }
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+            // SAFETY: fcntl(F_SETFD) only adds close-on-exec to the open descriptor just read.
+            unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
         }
     }
 }
@@ -264,7 +274,7 @@ pub fn identity(pid: u32) -> Option<ProcessIdentity> {
     let raw = libc::pid_t::try_from(pid).ok().filter(|p| *p > 0)?;
     // SAFETY: proc_pidinfo fills a zeroed proc_bsdinfo of the size we pass.
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    let size = libc::c_int::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
     // SAFETY: pointer and size describe `info`.
     let n = unsafe {
         libc::proc_pidinfo(
@@ -285,7 +295,7 @@ pub fn identity(pid: u32) -> Option<ProcessIdentity> {
     let exe = usize::try_from(len)
         .ok()
         .filter(|l| *l > 0 && *l <= buf.len())
-        .map(|l| PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..l])));
+        .map(|l| PathBuf::from(OsStr::from_bytes(&buf[..l])));
     let secs = info.pbi_start_tvsec;
     let micros = info.pbi_start_tvusec;
     Some(ProcessIdentity {

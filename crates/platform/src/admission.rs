@@ -66,6 +66,7 @@ pub trait HostView: Send + Sync {
 }
 
 /// The OS itself: socket tables or libproc, and the interfaces' addresses.
+#[derive(Debug)]
 pub struct OsHost;
 
 impl HostView for OsHost {
@@ -280,6 +281,7 @@ pub async fn judge(
 const REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Refusal logging without letting a flood of connections flood the log.
+#[derive(Debug)]
 pub struct RefusalLog {
     /// What was refused, for the log line ("web UI client", "access port client").
     what: &'static str,

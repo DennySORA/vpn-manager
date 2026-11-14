@@ -1,7 +1,7 @@
 //! `vpnd manager`: Instance Manager + Store + Platform. The long-lived core.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -81,6 +81,7 @@ pub async fn run(args: ManagerArgs) -> anyhow::Result<()> {
     drop(master);
 
     // The executable is fixed at start; workers are this exact file (build id checked).
+    // nosemgrep: rust.lang.security.current-exe.current-exe -- starts this same program as its workers; each worker's build id is checked against the manager's
     let exe = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .context("resolve own executable")?;
@@ -93,7 +94,7 @@ pub async fn run(args: ManagerArgs) -> anyhow::Result<()> {
 
     let sock = paths.manager_socket();
     // We hold the manager lock, so any existing socket file is a stale one of ours.
-    let _ = std::fs::remove_file(&sock);
+    remove_socket(&sock);
     let listener = UnixListener::bind(&sock).context("bind manager socket")?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))?;
     // SSH Manager: `vpnctl` ships next to `vpnd`; nothing is written until hosts exist or the
@@ -143,13 +144,9 @@ pub async fn run(args: ManagerArgs) -> anyhow::Result<()> {
             sock.clone(),
             WatchdogConfig::default(),
             move || {
-                stopping.load(Ordering::SeqCst)
-                    || manager.upgrade().is_none_or(|m| m.is_closing())
+                stopping.load(Ordering::SeqCst) || manager.upgrade().is_none_or(|m| m.is_closing())
             },
-            |why| {
-                tracing::error!(%why, "the manager stopped answering on its own socket: exiting so that its supervisor starts it again");
-                std::process::exit(EXIT_UNRESPONSIVE);
-            },
+            |why| exit_unresponsive(&why),
         )
         .context("start the manager watchdog")?;
     }
@@ -161,11 +158,32 @@ pub async fn run(args: ManagerArgs) -> anyhow::Result<()> {
     server.abort();
     // Fail closed: every worker is stopped and reaped before anything else happens.
     manager.shutdown().await;
-    let _ = std::fs::remove_file(&sock);
+    remove_socket(&sock);
     drop(store);
     Ok(())
+}
+
+/// Remove the manager's socket file. None there is fine; one that stays is reported, since the
+/// manager cannot bind its socket while the file is there.
+fn remove_socket(sock: &Path) {
+    if let Err(e) = std::fs::remove_file(sock)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(error = %e, socket = %sock.display(), "manager socket not removed");
+    }
 }
 
 /// Exit code when the watchdog found the manager no longer answering. Not 0, so launchd
 /// (`KeepAlive`/`SuccessfulExit` false) and systemd (`Restart=on-failure`) start it again.
 const EXIT_UNRESPONSIVE: i32 = 76;
+
+/// The watchdog found this manager no longer answering on its own socket: end the process with
+/// [`EXIT_UNRESPONSIVE`] at once, without the shutdown a stuck manager might never finish.
+#[expect(
+    clippy::exit,
+    reason = "called on the watchdog's own thread while the manager's runtime may be stuck, so `main` cannot be relied on to return the exit code"
+)]
+fn exit_unresponsive(why: &str) -> ! {
+    tracing::error!(%why, "the manager stopped answering on its own socket: exiting so that its supervisor starts it again");
+    std::process::exit(EXIT_UNRESPONSIVE)
+}

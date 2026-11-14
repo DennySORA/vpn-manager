@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use http::StatusCode;
 use http::header::{HeaderMap, RETRY_AFTER};
+use serde::Deserialize;
 use time::format_description::StaticFormatDescription;
 use time::{OffsetDateTime, PrimitiveDateTime};
 use vpn_domain::{ErrorCode, Text, tr};
@@ -209,6 +210,26 @@ pub(crate) fn status_error(
         status @ 500..=599 => ProviderError::Unavailable(Unavailable::Status(status)),
         _ => ProviderError::ContractDrift(unexpected_status()),
     }
+}
+
+/// `body` as the JSON its contract describes, or the [`ProviderError::ContractDrift`] that
+/// `drift` makes. Why it does not parse is logged at debug level by category and position only:
+/// serde's own message can quote the body, which may carry a token or an account number.
+pub(crate) fn from_json<'a, T: Deserialize<'a>>(
+    body: &'a [u8],
+    drift: impl FnOnce() -> ProviderError,
+) -> Result<T, ProviderError> {
+    serde_json::from_slice(body).map_err(|error| {
+        let drift = drift();
+        tracing::debug!(
+            what = %drift,
+            category = ?error.classify(),
+            line = error.line(),
+            column = error.column(),
+            "provider answer is not the JSON its contract describes"
+        );
+        drift
+    })
 }
 
 /// The part named by a [`ProviderError::ContractDrift`] for a status outside the contract.
