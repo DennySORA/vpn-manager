@@ -1,0 +1,463 @@
+// Text of the Providers page: the page and its list of accounts, one account (its page, tabs, actions and dialogs)
+// and its devices. The other parts of the page have their own tables: connect/messages.ts (creating a connection: the
+// servers, the entry and the exit), egress/messages.tsx (the Provider egress and the function checks) and
+// ports/messages.ts (AirVPN's inbound ports). Provider and product names (Mullvad, AirVPN, WireGuard) are not
+// translated.
+
+import { defineMessages } from "@/i18n";
+
+export const m = defineMessages({
+  en: {
+    /** A provider that is neither Mullvad nor AirVPN: an imported configuration file. */
+    genericProvider: "Generic",
+    /** A list that could not be read again still shows what it had; `time` is when that was read. */
+    staleSince: (time: string) => `Cannot refresh: showing the data from ${time}`,
+    egressNeeded: {
+      none: "No usable Provider egress right now",
+      forRequests: "A usable Provider egress is needed: provider requests leave only through it",
+      forServerList:
+        "A usable Provider egress is needed: provider requests leave only through it, and the server list is read through it too",
+    },
+    page: {
+      title: "Providers",
+      description: "Create VPN connections from a provider account.",
+      help: "Provider requests such as signing in, devices, server lists and AirVPN inbound ports leave only through the Provider egress, never through this computer's ordinary network; while the egress cannot be used they pause and say why. The account credentials are stored encrypted on this computer and cannot be read back.",
+      helpSummary:
+        "Provider requests leave only through the Provider egress, never through this computer's ordinary network.",
+      addAccount: "Add account",
+      accounts: "Provider accounts",
+      loadingAccounts: "Loading provider accounts",
+      noAccounts: "No accounts yet",
+      notFound: "Account not found",
+      notFoundHint: "It may have been removed.",
+      chooseAccount: "Choose an account",
+      chooseAccountHint:
+        "See the connections it created, its devices and inbound ports, or create a new connection from it.",
+      firstAccount: "Add your first provider account",
+      firstAccountHint:
+        "With a Mullvad or AirVPN account you pick a server and create a WireGuard connection right here, without downloading a configuration file by hand.",
+      egressUnreadable: "Cannot read the Provider egress",
+      loadingEgress: "Reading the Provider egress",
+    },
+    /** Until when an account is paid, as the provider last said. */
+    expiry: {
+      unknown: "Expiry date unknown",
+      expiredOn: (date: string) => `Expired on ${date}`,
+      today: (date: string) => `Expires today (${date})`,
+      soon: (days: number, date: string) => `${days} ${days === 1 ? "day" : "days"} left (expires ${date})`,
+      later: (days: number, date: string) => `Expires ${date} (${days} ${days === 1 ? "day" : "days"} left)`,
+      expired: "Expired",
+      expiresToday: "Expires today",
+      daysLeft: (days: number) => `${days} ${days === 1 ? "day" : "days"} left`,
+    },
+    account: {
+      /** The name of an account that was given none. */
+      defaultLabel: (provider: string) => `${provider} account`,
+      refresh: "Refresh account",
+      refreshing: "Reading",
+      refreshed: (label: string) => `Refreshed ${label}`,
+      refreshedDetail: "The expiry date, the devices and the server list are the provider's answers as of now.",
+      refreshIntent: (label: string) => `Refresh ${label}`,
+      connect: "Create connection",
+      remove: "Remove account",
+      removeBlockedByProfiles: (count: number) =>
+        count === 1
+          ? "The WireGuard profile this account created still exists: delete it on the “WireGuard profiles” page first"
+          : `The ${count} WireGuard profiles this account created still exist: delete them on the “WireGuard profiles” page first`,
+      idLabel: "Account ID",
+      actionsOf: (label: string) => `Actions for ${label}`,
+      viewsOf: (label: string) => `Views of ${label}`,
+      tabs: { ports: "Inbound ports", devices: "Devices", checks: "Function checks" },
+      egressDown: "The Provider egress cannot be used right now",
+      egressDownHint:
+        "Reading devices, servers and inbound ports and creating connections all go through the Provider egress; deal with the egress state at the top of the page first.",
+      direct: "During the direct connection",
+      directHint:
+        "Provider requests do not go through a VPN for now: create a connection from this account; once it is up it becomes the Provider egress and the direct connection ends.",
+      expiredHint: "The provider refuses this account's connections; after renewing, press “Refresh account”.",
+      footerNote: (provider: string) =>
+        `Pick a server from ${provider}'s list and create a connection with one of this account's devices; provider requests leave only through the Provider egress.`,
+      footerNeedsEgress: "Reading the servers and creating connections needs a usable Provider egress.",
+      connections: "Connections created from this account",
+      connectionsOf: (label: string) => `Connections created from ${label}`,
+      noConnections: "No connection created from this account yet",
+      noConnectionsHint: "Press “Create connection” below to pick a server.",
+      facts: "Account",
+      provider: "Provider",
+      paidUntil: "Paid until",
+      /** `when` is a relative time (“3 minutes ago”). */
+      answered: (when: string) => `The provider's answer, ${when}`,
+      notAnswered: "No answer read from the provider yet",
+      credentials: "Credentials",
+      credentialsStored: "Stored encrypted on this computer; cannot be read back",
+      added: "Added",
+      checksNote:
+        "Each item is checked and recorded on its own: a passed exit check does not mean that exit ownership, IPv6, generating connection settings or port forwarding are confirmed too. “Check exit” at the top of the page checks IPv6 separately.",
+    },
+    add: {
+      title: "Add a provider account",
+      description:
+        "The account is verified with the provider first; the verification request leaves through the Provider egress.",
+      submit: "Verify and add",
+      verifying: "Verifying",
+      noEgressReason: "No usable Provider egress right now: provider requests never fall back to the ordinary network",
+      noEgressHint:
+        "First choose a VPN connection that reaches the Internet as the egress, at the top of the page. Provider requests never fall back to the ordinary network.",
+      provider: "Provider",
+      storedEncrypted: "Stored encrypted; cannot be read back",
+      nameHint: "Shown only here, to tell the accounts apart.",
+      accountNumber: "Account number",
+      accountNumberHint: "16 digits; you find it on the Mullvad website or in its app.",
+      hideAccountNumber: "Hide the account number",
+      showAccountNumber: "Show the account number",
+      username: "Username",
+      password: "Password",
+      airvpnDevices:
+        "AirVPN issues its devices and keys: create a device in the Client Area of AirVPN's website first; they are read from there.",
+      firstSetup: "First setup: one direct connection is needed",
+      firstSetupHint:
+        "There is no usable VPN egress yet. Once you allow it, this computer connects straight to the provider's fixed addresses for 10 minutes at most (not through a VPN), only to verify the account, read the servers and create the first connection; the direct connection ends as soon as that connection is up, and is never opened again.",
+      allowDirect: "Allow the first direct connection (10 minutes)",
+      errors: {
+        accountNumber: "The account number has 16 digits",
+        username: "Enter the username",
+        password: "Enter the password",
+        direct: "Verifying the account needs the first direct connection to be allowed",
+      },
+      added: (label: string) => `Added ${label}`,
+      addedDetail: "The credentials are stored encrypted on this computer and are not shown again.",
+    },
+    remove: {
+      title: (label: string) => `Remove the account “${label}”?`,
+      whatIsDeleted: (provider: string) =>
+        `Only the credentials kept on this computer are deleted (the encrypted account number or password); the devices, inbound ports and payment state at ${provider} do not change.`,
+      afterwards:
+        "To create connections from this account again, change their entry and exit or manage inbound ports, you have to add it again.",
+      removed: (label: string) => `Removed ${label}`,
+      removedDetail: "The credentials kept on this computer were deleted; the devices at the provider are unchanged.",
+      intent: (label: string) => `Remove ${label}`,
+    },
+    devices: {
+      title: "Devices",
+      /** A device by name, inside a sentence or an accessible name. */
+      named: (label: string) => `device ${label}`,
+      listOf: (account: string) => `Devices of ${account}`,
+      keyHere: "Key on this computer",
+      keyFromAirvpn: "Key provided by AirVPN",
+      keyElsewhere: "Key not on this computer",
+      needEgress: "Reading the devices needs a usable Provider egress.",
+      unreadable: "Cannot read the devices",
+      loading: "Reading the devices",
+      none: "This account has no devices yet",
+      noneAirvpn: "AirVPN devices and keys are created in the Client Area of its website.",
+      noneMullvad: "When you create a connection, this computer can make a new device.",
+      revoke: "Revoke device",
+      revokeBlockedByProfiles: (names: readonly string[]) =>
+        `Still used by ${names.join(", ")}: delete ${names.length === 1 ? "that WireGuard profile" : "those WireGuard profiles"} first`,
+      revokeTitle: (label: string) => `Revoke the device “${label}”?`,
+      revokeOwned:
+        "Mullvad removes this device and frees one device slot; the private key kept on this computer is deleted too, so it can no longer be used to connect. No WireGuard profile uses it; other devices are not affected.",
+      revokeElsewhere:
+        "This device's key is not on this computer; it may be in use on another computer or a phone: once it is revoked, that device can no longer connect, at once.",
+      revokeElsewhereNote:
+        "Revoke it only when you are sure it is no longer used; Mullvad frees one device slot. This cannot be undone.",
+      revoked: (label: string) => `Revoked ${label}`,
+      revokedOwnedDetail: "Mullvad removed the device, and its key on this computer was deleted.",
+      revokedDetail: "Mullvad removed the device.",
+      revokeIntent: (label: string) => `Revoke ${label}`,
+    },
+  },
+  "zh-TW": {
+    genericProvider: "一般",
+    staleSince: (time) => `無法更新：顯示的是 ${time} 的資料`,
+    egressNeeded: {
+      none: "目前沒有可用的 Provider 出口",
+      forRequests: "需要可用的 Provider 出口：供應商請求只經它送出",
+      forServerList: "需要可用的 Provider 出口：供應商請求只經它送出，伺服器清單也要經它讀取",
+    },
+    page: {
+      title: "供應商",
+      description: "用供應商帳號建立 VPN 連線。",
+      help: "登入、裝置、伺服器清單與 AirVPN 連入埠等供應商請求都只經 Provider 出口送出，不經這台電腦的一般網路；出口無法使用時這些操作會暫停並說明原因。帳號資料加密保存在這台電腦，無法讀回。",
+      helpSummary: "供應商請求都只經 Provider 出口送出，不經這台電腦的一般網路。",
+      addAccount: "加入帳號",
+      accounts: "供應商帳號",
+      loadingAccounts: "載入供應商帳號",
+      noAccounts: "還沒有帳號",
+      notFound: "找不到這個帳號",
+      notFoundHint: "它可能已被移除。",
+      chooseAccount: "選擇一個帳號",
+      chooseAccountHint: "查看它建立的連線、裝置與連入埠，或用它建立新的連線。",
+      firstAccount: "加入第一個供應商帳號",
+      firstAccountHint: "用 Mullvad 或 AirVPN 帳號直接在這裡挑伺服器、建立 WireGuard 連線，不需要手動下載設定檔。",
+      egressUnreadable: "無法讀取 Provider 出口",
+      loadingEgress: "讀取 Provider 出口",
+    },
+    expiry: {
+      unknown: "到期日未知",
+      expiredOn: (date) => `已於 ${date} 到期`,
+      today: (date) => `今天到期（${date}）`,
+      soon: (days, date) => `剩 ${days} 天（${date} 到期）`,
+      later: (days, date) => `${date} 到期（剩 ${days} 天）`,
+      expired: "已到期",
+      expiresToday: "今天到期",
+      daysLeft: (days) => `剩 ${days} 天`,
+    },
+    account: {
+      defaultLabel: (provider) => `${provider} 帳號`,
+      refresh: "重新讀取帳號",
+      refreshing: "讀取中",
+      refreshed: (label) => `已重新讀取 ${label}`,
+      refreshedDetail: "到期日、裝置與伺服器清單都是供應商現在的回答。",
+      refreshIntent: (label) => `重新讀取 ${label}`,
+      connect: "建立連線",
+      remove: "移除帳號",
+      removeBlockedByProfiles: (count) =>
+        `這個帳號建立的 ${count} 份 WireGuard 設定還在：先在「WireGuard 設定」頁刪除它們`,
+      idLabel: "帳號 ID",
+      actionsOf: (label) => `${label} 的操作`,
+      viewsOf: (label) => `${label} 的檢視`,
+      tabs: { ports: "連入埠", devices: "裝置", checks: "功能檢查" },
+      egressDown: "Provider 出口目前無法使用",
+      egressDownHint: "讀取裝置、伺服器、連入埠與建立連線都需要經 Provider 出口；請先處理頁面上方的出口狀態。",
+      direct: "直連期間",
+      directHint: "供應商請求暫時不經 VPN：用這個帳號建立一條連線，它連上後會成為 Provider 出口，直連隨即結束。",
+      expiredHint: "供應商會拒絕這個帳號的連線；續約後按「重新讀取帳號」。",
+      footerNote: (provider) =>
+        `從 ${provider} 的伺服器清單挑一台，用這個帳號的裝置建立連線；供應商請求只經 Provider 出口送出。`,
+      footerNeedsEgress: "需要可用的 Provider 出口才能讀取伺服器與建立連線。",
+      connections: "由這個帳號建立的連線",
+      connectionsOf: (label) => `由 ${label} 建立的連線`,
+      noConnections: "還沒有用這個帳號建立的連線",
+      noConnectionsHint: "按下方的「建立連線」挑一台伺服器。",
+      facts: "帳號",
+      provider: "供應商",
+      paidUntil: "付費期限",
+      answered: (when) => `供應商 ${when}的回答`,
+      notAnswered: "還沒有讀到供應商的回答",
+      credentials: "帳號資料",
+      credentialsStored: "加密保存在這台電腦，無法讀回",
+      added: "加入",
+      checksNote:
+        "每一項各自檢查、各自記錄：出口檢查通過，不代表出口歸屬、IPv6、產生連線設定或轉發也已確認。頁面上方的「檢查出口」會另外檢查 IPv6。",
+    },
+    add: {
+      title: "加入供應商帳號",
+      description: "帳號會先向供應商驗證；驗證請求經 Provider 出口送出。",
+      submit: "驗證並加入",
+      verifying: "驗證中",
+      noEgressReason: "目前沒有可用的 Provider 出口：供應商請求不會改走一般網路",
+      noEgressHint: "請先在頁面上方選擇一條能連上網際網路的 VPN 連線作為出口。供應商請求不會改走一般網路。",
+      provider: "供應商",
+      storedEncrypted: "加密保存，無法讀回",
+      nameHint: "只在這裡顯示，用來分辨帳號。",
+      accountNumber: "帳號號碼",
+      accountNumberHint: "16 位數字，可在 Mullvad 網站或 App 找到。",
+      hideAccountNumber: "隱藏帳號號碼",
+      showAccountNumber: "顯示帳號號碼",
+      username: "使用者名稱",
+      password: "密碼",
+      airvpnDevices: "AirVPN 的裝置與金鑰由 AirVPN 簽發：請先在 AirVPN 網站的 Client Area 建立裝置，這裡會讀取它們。",
+      firstSetup: "第一次設定：需要直接連線一次",
+      firstSetupHint:
+        "還沒有可用的 VPN 出口。允許後，這台電腦會在 10 分鐘內直接連到供應商的固定網址（不經 VPN），只用來驗證帳號、讀取伺服器並建立第一條連線；它連上後直連立即結束，之後不會再開放。",
+      allowDirect: "允許首次直連（10 分鐘）",
+      errors: {
+        accountNumber: "帳號號碼是 16 位數字",
+        username: "請輸入使用者名稱",
+        password: "請輸入密碼",
+        direct: "需要允許首次直連才能驗證帳號",
+      },
+      added: (label) => `已加入 ${label}`,
+      addedDetail: "帳號資料已加密保存在這台電腦，之後不會再顯示。",
+    },
+    remove: {
+      title: (label) => `移除帳號「${label}」？`,
+      whatIsDeleted: (provider) =>
+        `只刪除這台電腦保存的帳號資料（加密的帳號號碼或密碼）；${provider} 上的裝置、連入埠與付費狀態都不會改變。`,
+      afterwards: "之後要再用這個帳號建立連線、更換入口與出口或管理連入埠，需要重新加入。",
+      removed: (label) => `已移除 ${label}`,
+      removedDetail: "這台電腦保存的帳號資料已刪除；供應商上的裝置沒有改變。",
+      intent: (label) => `移除 ${label}`,
+    },
+    devices: {
+      title: "裝置",
+      named: (label) => `裝置 ${label}`,
+      listOf: (account) => `${account} 的裝置`,
+      keyHere: "金鑰在這台電腦",
+      keyFromAirvpn: "金鑰由 AirVPN 提供",
+      keyElsewhere: "金鑰不在這台電腦",
+      needEgress: "需要可用的 Provider 出口才能讀取裝置。",
+      unreadable: "無法讀取裝置",
+      loading: "讀取裝置",
+      none: "這個帳號還沒有裝置",
+      noneAirvpn: "AirVPN 的裝置與金鑰在它的網站 Client Area 建立。",
+      noneMullvad: "建立連線時可以讓這台電腦產生一個新裝置。",
+      revoke: "撤銷裝置",
+      revokeBlockedByProfiles: (names) => `仍被 ${names.join("、")} 使用：先刪除這些 WireGuard 設定`,
+      revokeTitle: (label) => `撤銷裝置「${label}」？`,
+      revokeOwned:
+        "Mullvad 會移除這個裝置並釋出一個裝置名額；這台電腦保存的私鑰也會刪除，之後無法再用它連線。沒有 WireGuard 設定使用它；其他裝置不受影響。",
+      revokeElsewhere: "這個裝置的金鑰不在這台電腦，可能正在其他電腦或手機上使用：撤銷後那台設備會立即無法連線。",
+      revokeElsewhereNote: "只有確定不再使用它時才撤銷；Mullvad 會釋出一個裝置名額。無法復原。",
+      revoked: (label) => `已撤銷 ${label}`,
+      revokedOwnedDetail: "Mullvad 已移除這個裝置，這台電腦上的金鑰也已刪除。",
+      revokedDetail: "Mullvad 已移除這個裝置。",
+      revokeIntent: (label) => `撤銷 ${label}`,
+    },
+  },
+  ja: {
+    genericProvider: "汎用",
+    staleSince: (time) => `更新できません：${time} 時点のデータを表示しています`,
+    egressNeeded: {
+      none: "現在、利用できる Provider 出口がありません",
+      forRequests: "利用できる Provider 出口が必要です：プロバイダーへのリクエストはそこだけを通って送信されます",
+      forServerList:
+        "利用できる Provider 出口が必要です：プロバイダーへのリクエストはそこだけを通って送信され、サーバー一覧もそこを通って読み込みます",
+    },
+    page: {
+      title: "プロバイダー",
+      description: "プロバイダーのアカウントで VPN 接続を作成します。",
+      help: "ログイン、デバイス、サーバー一覧、AirVPN の着信ポートなど、プロバイダーへのリクエストはすべて Provider 出口だけを通って送信され、このコンピューターの通常のネットワークは通りません。出口が使えない間はこれらの操作を一時停止し、理由を表示します。アカウント情報はこのコンピューターに暗号化して保存され、読み出すことはできません。",
+      helpSummary:
+        "プロバイダーへのリクエストはすべて Provider 出口だけを通って送信され、このコンピューターの通常のネットワークは通りません。",
+      addAccount: "アカウントを追加",
+      accounts: "プロバイダーアカウント",
+      loadingAccounts: "プロバイダーアカウントを読み込み中",
+      noAccounts: "アカウントはまだありません",
+      notFound: "このアカウントが見つかりません",
+      notFoundHint: "削除された可能性があります。",
+      chooseAccount: "アカウントを選択",
+      chooseAccountHint: "作成した接続、デバイス、着信ポートを確認したり、新しい接続を作成したりできます。",
+      firstAccount: "最初のプロバイダーアカウントを追加",
+      firstAccountHint:
+        "Mullvad または AirVPN のアカウントがあれば、ここで直接サーバーを選んで WireGuard 接続を作成できます。設定ファイルを手動でダウンロードする必要はありません。",
+      egressUnreadable: "Provider 出口を読み込めません",
+      loadingEgress: "Provider 出口を読み込み中",
+    },
+    expiry: {
+      unknown: "有効期限は不明",
+      expiredOn: (date) => `${date} に期限切れ`,
+      today: (date) => `今日が期限（${date}）`,
+      soon: (days, date) => `残り ${days} 日（${date} まで有効）`,
+      later: (days, date) => `${date} まで有効（残り ${days} 日）`,
+      expired: "期限切れ",
+      expiresToday: "今日が期限",
+      daysLeft: (days) => `残り ${days} 日`,
+    },
+    account: {
+      defaultLabel: (provider) => `${provider} アカウント`,
+      refresh: "アカウントを再読み込み",
+      refreshing: "読み込み中",
+      refreshed: (label) => `「${label}」を再読み込みしました`,
+      refreshedDetail: "有効期限、デバイス、サーバー一覧は、いずれもプロバイダーの現在の回答です。",
+      refreshIntent: (label) => `「${label}」の再読み込み`,
+      connect: "接続を作成",
+      remove: "アカウントを削除",
+      removeBlockedByProfiles: (count) =>
+        `このアカウントで作成した WireGuard 設定が ${count} 件残っています：先に「WireGuard 設定」ページで削除してください`,
+      idLabel: "アカウント ID",
+      actionsOf: (label) => `${label} の操作`,
+      viewsOf: (label) => `${label} のビュー`,
+      tabs: { ports: "着信ポート", devices: "デバイス", checks: "機能チェック" },
+      egressDown: "現在、Provider 出口は使えません",
+      egressDownHint:
+        "デバイス、サーバー、着信ポートの読み込みと接続の作成は、すべて Provider 出口を通ります。先にページ上部の出口の状態に対処してください。",
+      direct: "直接接続中",
+      directHint:
+        "プロバイダーへのリクエストは一時的に VPN を通りません。このアカウントで接続を 1 つ作成してください。その接続が確立すると Provider 出口になり、直接接続はすぐに終了します。",
+      expiredHint:
+        "プロバイダーはこのアカウントの接続を拒否します。契約を更新したら「アカウントを再読み込み」を押してください。",
+      footerNote: (provider) =>
+        `${provider} のサーバー一覧から 1 台選び、このアカウントのデバイスで接続を作成します。プロバイダーへのリクエストは Provider 出口だけを通って送信されます。`,
+      footerNeedsEgress: "サーバーの読み込みと接続の作成には、利用できる Provider 出口が必要です。",
+      connections: "このアカウントで作成した接続",
+      connectionsOf: (label) => `${label} で作成した接続`,
+      noConnections: "このアカウントで作成した接続はまだありません",
+      noConnectionsHint: "下の「接続を作成」を押してサーバーを選んでください。",
+      facts: "アカウント",
+      provider: "プロバイダー",
+      paidUntil: "有効期限",
+      answered: (when) => `プロバイダーの回答（${when}）`,
+      notAnswered: "プロバイダーの回答はまだ読み込まれていません",
+      credentials: "アカウント情報",
+      credentialsStored: "このコンピューターに暗号化して保存され、読み出すことはできません",
+      added: "追加日時",
+      checksNote:
+        "各項目は個別にチェックされ、個別に記録されます。出口チェックに合格しても、出口の帰属、IPv6、接続設定の生成、ポート転送まで確認されたことにはなりません。ページ上部の「出口を確認」は IPv6 を別途チェックします。",
+    },
+    add: {
+      title: "プロバイダーアカウントを追加",
+      description:
+        "アカウントはまずプロバイダーに照会して検証します。検証のリクエストは Provider 出口を通って送信されます。",
+      submit: "検証して追加",
+      verifying: "検証中",
+      noEgressReason:
+        "現在、利用できる Provider 出口がありません：プロバイダーへのリクエストが通常のネットワークに切り替わることはありません",
+      noEgressHint:
+        "先にページ上部で、インターネットに接続できる VPN 接続を出口として選んでください。プロバイダーへのリクエストが通常のネットワークに切り替わることはありません。",
+      provider: "プロバイダー",
+      storedEncrypted: "暗号化して保存、読み出し不可",
+      nameHint: "ここにだけ表示され、アカウントを見分けるために使います。",
+      accountNumber: "アカウント番号",
+      accountNumberHint: "16 桁の数字です。Mullvad の Web サイトまたはアプリで確認できます。",
+      hideAccountNumber: "アカウント番号を隠す",
+      showAccountNumber: "アカウント番号を表示",
+      username: "ユーザー名",
+      password: "パスワード",
+      airvpnDevices:
+        "AirVPN のデバイスと鍵は AirVPN が発行します。先に AirVPN の Web サイトの Client Area でデバイスを作成してください。ここではそれらを読み込みます。",
+      firstSetup: "初回設定：一度だけ直接接続が必要です",
+      firstSetupHint:
+        "利用できる VPN 出口がまだありません。許可すると、このコンピューターは最大 10 分間、プロバイダーの固定アドレスに直接（VPN を通さずに）接続します。用途はアカウントの検証、サーバーの読み込み、最初の接続の作成だけです。その接続が確立すると直接接続はすぐに終了し、以後は開放されません。",
+      allowDirect: "初回の直接接続を許可（10 分）",
+      errors: {
+        accountNumber: "アカウント番号は 16 桁の数字です",
+        username: "ユーザー名を入力してください",
+        password: "パスワードを入力してください",
+        direct: "アカウントを検証するには、初回の直接接続を許可する必要があります",
+      },
+      added: (label) => `「${label}」を追加しました`,
+      addedDetail: "アカウント情報はこのコンピューターに暗号化して保存され、以後は表示されません。",
+    },
+    remove: {
+      title: (label) => `アカウント「${label}」を削除しますか？`,
+      whatIsDeleted: (provider) =>
+        `このコンピューターに保存されたアカウント情報（暗号化されたアカウント番号またはパスワード）だけを削除します。${provider} 側のデバイス、着信ポート、支払い状況は変わりません。`,
+      afterwards:
+        "このアカウントで再び接続を作成したり、入口と出口を変更したり、着信ポートを管理したりするには、もう一度追加する必要があります。",
+      removed: (label) => `「${label}」を削除しました`,
+      removedDetail:
+        "このコンピューターに保存されたアカウント情報を削除しました。プロバイダー側のデバイスは変更されていません。",
+      intent: (label) => `「${label}」の削除`,
+    },
+    devices: {
+      title: "デバイス",
+      named: (label) => `デバイス ${label}`,
+      listOf: (account) => `${account} のデバイス`,
+      keyHere: "鍵はこのコンピューター上",
+      keyFromAirvpn: "鍵は AirVPN が提供",
+      keyElsewhere: "鍵はこのコンピューター外",
+      needEgress: "デバイスを読み込むには、利用できる Provider 出口が必要です。",
+      unreadable: "デバイスを読み込めません",
+      loading: "デバイスを読み込み中",
+      none: "このアカウントにはまだデバイスがありません",
+      noneAirvpn: "AirVPN のデバイスと鍵は、AirVPN の Web サイトの Client Area で作成します。",
+      noneMullvad: "接続を作成するときに、このコンピューターで新しいデバイスを作成できます。",
+      revoke: "デバイスを失効",
+      revokeBlockedByProfiles: (names) =>
+        `${names.join("、")} がまだ使用しています：先にこれらの WireGuard 設定を削除してください`,
+      revokeTitle: (label) => `デバイス「${label}」を失効させますか？`,
+      revokeOwned:
+        "Mullvad はこのデバイスを削除し、デバイス枠を 1 つ解放します。このコンピューターに保存された秘密鍵も削除され、以後その鍵では接続できません。このデバイスを使う WireGuard 設定はなく、ほかのデバイスには影響しません。",
+      revokeElsewhere:
+        "このデバイスの鍵はこのコンピューターになく、別のコンピューターやスマートフォンで使用中の可能性があります。失効させると、その機器はすぐに接続できなくなります。",
+      revokeElsewhereNote:
+        "使わないことが確実な場合にのみ失効させてください。Mullvad はデバイス枠を 1 つ解放します。元に戻せません。",
+      revoked: (label) => `「${label}」を失効させました`,
+      revokedOwnedDetail: "Mullvad がこのデバイスを削除し、このコンピューター上の鍵も削除しました。",
+      revokedDetail: "Mullvad がこのデバイスを削除しました。",
+      revokeIntent: (label) => `「${label}」の失効`,
+    },
+  },
+});

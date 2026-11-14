@@ -1,0 +1,34 @@
+[package]
+name = "vpn-ssh-download"
+description = "SSH download: jobs that pull files from a remote folder over SFTP into a local folder, with resumable transfers and records. Every connection goes through a VPN Manager Gateway (SOCKS5, the name resolved inside the tunnel); there is no direct path. Runs in the manager."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vpn-domain = { path = "../domain" }
+vpn-ipc = { path = "../ipc" }
+# The SOCKS5 client that proves the Gateway is ours and fails instead of connecting directly.
+vpn-ssh = { path = "../ssh" }
+# Its own tables (job state, file records, log) and the vault; the only Store access it has.
+vpn-store = { path = "../store" }
+vpn-sync = { path = "../sync" }
+russh.workspace = true
+russh-sftp.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,45 @@
+# Static gates of the scripts/ owner (run ./check.sh). The scripts themselves are stdlib-only and
+# run under the host's python3; this project only pins the locked dev tools that check them.
+[project]
+name = "vpn-manager-scripts"
+version = "0.0.0"
+description = "Leak-capture tooling and helper scripts of VPN Manager (static gates only)"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "mypy==2.4.1",
+  "ruff==0.17.4",
+  "shellcheck-py==0.11.0.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+# The scripts promise Python 3.9+ on the host (see their docstrings): lint and format for that.
+target-version = "py39"
+line-length = 100
+cache-dir = ".venv/.ruff_cache"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  # Pairs that contradict each other: keep D211 and D212.
+  "D203",
+  "D213",
+  # Conflict with the formatter (https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules).
+  "COM812",
+  "ISC001",
+  # Repository convention: the licence is declared once (Cargo.toml `license`), no per-file
+  # copyright headers anywhere in the tree.
+  "CPY001",
+]
+
+[tool.mypy]
+strict = true
+# mypy checks against 3.10 at the lowest; ruff target-version py39 keeps the syntax 3.9-safe.
+python_version = "3.10"
+cache_dir = ".venv/.mypy_cache"
+warn_unreachable = true

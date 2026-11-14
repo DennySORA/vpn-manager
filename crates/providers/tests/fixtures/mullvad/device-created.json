@@ -1,0 +1,10 @@
+{
+  "id": "b3e5f7a9-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+  "name": "quiet lynx",
+  "pubkey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+  "hijack_dns": false,
+  "created": "2026-10-26T10:00:00+00:00",
+  "ipv4_address": "10.64.3.4/32",
+  "ipv6_address": "fc00:bbbb:bbbb:bb01::3:4/128",
+  "ports": []
+}

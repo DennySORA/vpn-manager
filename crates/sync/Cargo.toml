@@ -1,0 +1,15 @@
+[package]
+name = "vpn-sync"
+description = "The workspace's blocking locks: parking_lot's Mutex and RwLock under a hand-over schedule that keeps waiting threads from being starved."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Declared here and not for the workspace: this crate is the only one that may use it (deny.toml).
+parking_lot = "0.13.0"
+
+[lints]
+workspace = true

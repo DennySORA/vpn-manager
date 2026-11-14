@@ -1,0 +1,57 @@
+[package]
+name = "vpn-controller"
+description = "VPN Controller: VPN Web API, VPN Core, VPN Profile Checker and VPN Platform Controller. Stateless; every durable read/write goes through the manager (Store helper)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vpn-ssh = { path = "../ssh" }
+vpn-domain = { path = "../domain" }
+vpn-ipc = { path = "../ipc" }
+vpn-web-provide = { path = "../web-provide" }
+vpn-providers = { path = "../providers" }
+# Its own process facts for diagnostics (start time, memory, CPU) and the API socket's peer
+# check and stale-socket probe; no network or listener code of the platform crate is used.
+vpn-platform = { path = "../platform" }
+vpn-sync = { path = "../sync" }
+axum.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+async-stream = "0.3.6"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+zeroize.workspace = true
+ipnetwork.workspace = true
+x25519-dalek.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }
+http-body-util.workspace = true
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+tempfile.workspace = true
+# A real manager behind the router (diagnostics redaction, recovery, blocklists, bans).
+vpn-instance-manager = { path = "../instance-manager" }
+vpn-store = { path = "../store" }
+vpn-platform = { path = "../platform" }
+# The Provider egress guard against an in-memory relay with a throwaway CA (tests/provider_guard.rs).
+vpn-providers = { path = "../providers", features = ["testing"] }
+rcgen.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+# The Provider egress tests remove a key behind the Store's back.
+rusqlite.workspace = true
+# The forwarded-ports tests capture every log line to prove no secret reaches one.
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "vpn-web-provide"
+description = "Web Provide Service: serves the embedded React workbench (static assets only, no business state)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+rust-embed = { version = "8.14.0", features = ["mime-guess"] }
+mime_guess = "2.0.5"
+
+[lints]
+workspace = true

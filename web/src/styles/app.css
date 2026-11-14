@@ -1,0 +1,567 @@
+/*
+ * Base, component classes, view transitions and forced colors. Tokens and utilities live in tokens.css
+ * (the single token owner). Adapted from Phasyn Studio (Apache-2.0), with VPN Manager's own rules marked as such.
+ */
+@import "./tokens.css";
+
+/*
+ * The workbench is an application shell fixed to the window: the document never scrolls, every panel owns its own
+ * scroll. (An absolutely positioned sr-only text inside a table would otherwise stretch the document and let a wheel
+ * or focus scroll the whole app.) Not layered: these only touch html, body and #root.
+ */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  overflow: hidden;
+  /* A panel scrolled to its end does not chain or bounce into the document vertically. */
+  overscroll-behavior-y: none;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * An element carrying its own lang re-applies that language's stack (font-family is inherited as a computed value).
+   * Specificity 0: `:lang(x) { font-family }` would beat the monospace rule on code inside English text.
+   */
+  :where([lang]) {
+    font-family: var(--font-sans);
+  }
+
+  /* Interface icons (lucide) use a 1.75 stroke; charts and the topology draw their own SVG. */
+  svg.lucide {
+    stroke-width: 1.75;
+  }
+
+  /* A fieldset otherwise refuses to shrink below its widest line and pushes out of narrow panels (VPN Manager). */
+  fieldset {
+    min-inline-size: 0;
+  }
+
+  /* Thin scrollbars (every panel is its own scroll owner): line-strong thumb, one step brighter on hover. */
+  * {
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    inline-size: 10px;
+    block-size: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+    background-color: var(--color-line-strong);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-line-control);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Focus ring: brand cyan, 2 px; it appears 4 px out and settles to 2 px (120 ms). */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: rgb(62 137 255 / 0.38);
+    color: var(--color-fg);
+  }
+
+  /* Links keep the colour their component gives them (VPN Manager); underlines sit a little lower. */
+  a {
+    text-underline-offset: 3px;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-fg-tertiary);
+    opacity: 1;
+  }
+
+  /* Native select menus use the dark system controls too. */
+  select,
+  option {
+    background-color: var(--color-sunken);
+    color: var(--color-fg);
+  }
+
+  /* Browser autofill keeps the sunken field (VPN Manager). */
+  input:-webkit-autofill {
+    -webkit-text-fill-color: var(--color-fg);
+    -webkit-box-shadow: 0 0 0 40px var(--color-sunken) inset;
+    caret-color: var(--color-fg);
+  }
+
+  /* Native checkboxes, radios and ranges use the deep brand blue. */
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  progress {
+    accent-color: var(--color-action);
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  /*
+   * Default transitions of interactive elements (colour, background, border, shadow, the focus ring settling) so rows,
+   * tabs, options and links that write none of their own still change smoothly. :where() adds no specificity: any
+   * transition-* utility or `pressable` overrides it.
+   */
+  :where(
+    a,
+    button,
+    summary,
+    [role="tab"],
+    [role="treeitem"],
+    [role="option"],
+    [role="menuitem"],
+    [role="row"],
+    [role="radio"],
+    [role="switch"],
+    tr
+  ) {
+    outline-offset: 4px;
+    transition-property:
+      color, background-color, border-color, text-decoration-color, fill, stroke, box-shadow, outline-offset;
+    transition-duration: var(--duration-fast);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  :where(
+    a,
+    button,
+    summary,
+    [role="tab"],
+    [role="treeitem"],
+    [role="option"],
+    [role="menuitem"],
+    [role="row"],
+    [role="radio"],
+    [role="switch"],
+    tr
+  ):focus-visible {
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /*
+   * A plain group panel: solid surface, hairline, inner top light. Panels are containing blocks: an absolute descendant
+   * (an sr-only live region, a tooltip anchor) stays inside the panel's scroll and clip (VPN Manager).
+   */
+  .panel {
+    position: relative;
+    min-inline-size: 0;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    background-color: var(--color-surface);
+    box-shadow: var(--shadow-edge);
+  }
+
+  /* The raised major region (at most two per view): a faint brand top light and a deeper shadow. */
+  .panel-raised {
+    position: relative;
+    min-inline-size: 0;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    background-color: var(--color-surface);
+    background-image: linear-gradient(180deg, rgb(120 150 255 / 0.05), transparent 88px);
+    box-shadow: var(--shadow-raised);
+  }
+
+  /*
+   * A small floating surface (chart tooltips, hover cards): popover glass with a 1 px border and a top sheen. Text
+   * contrast is computed against the overlay colour; supporting text inside uses fg-secondary.
+   */
+  .overlay-surface {
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: var(--radius-lg);
+    background-color: rgb(18 26 45 / 0.86);
+    background-image: linear-gradient(180deg, rgb(140 165 255 / 0.06), transparent 96px);
+    box-shadow:
+      inset 0 0 0 0.5px rgb(255 255 255 / 0.04),
+      var(--shadow-popover);
+    color: var(--color-fg);
+    -webkit-backdrop-filter: blur(32px) saturate(180%);
+    backdrop-filter: blur(32px) saturate(180%);
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .overlay-surface {
+      background-color: var(--color-overlay);
+    }
+  }
+
+  /* Machine values (IDs, ports, addresses, keys, counts, times): mono, tabular, break anywhere. */
+  .machine {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  /* Loading placeholder: raised ground with a sweeping highlight (animate-shimmer). */
+  .skeleton {
+    border-radius: var(--radius-md);
+    background-color: var(--color-raised);
+    background-image: linear-gradient(
+      105deg,
+      transparent calc(var(--shimmer-x) - 18%),
+      rgb(150 175 255 / 0.1) var(--shimmer-x),
+      transparent calc(var(--shimmer-x) + 18%)
+    );
+  }
+
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* Tab and navigation indicators (components/ui/active-indicator.tsx) slide on the snappy spring; hidden until placed. */
+  [data-tab-indicator] {
+    transition:
+      transform var(--duration-spring-snappy) var(--ease-spring-snappy),
+      opacity var(--duration-fast) linear;
+  }
+
+  [data-tab-indicator]:not([data-state="visible"]) {
+    opacity: 0;
+  }
+
+  /* A gradient edge drawn above full-bleed content (a separate span; border-brand-gradient sits under children). */
+  .brand-edge {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--gradient-brand);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box exclude,
+      linear-gradient(#000 0 0);
+    pointer-events: none;
+  }
+
+  /* components/ui/disclosure.tsx: where ::details-content is supported the height opens on the smooth spring. */
+  .disclosure {
+    interpolate-size: allow-keywords;
+  }
+
+  .disclosure::details-content {
+    block-size: 0;
+    overflow-y: clip;
+    transition:
+      block-size var(--duration-spring-smooth) var(--ease-spring-smooth),
+      content-visibility var(--duration-spring-smooth) allow-discrete;
+  }
+
+  .disclosure[open]::details-content {
+    block-size: auto;
+  }
+
+  /* Logo and live-dot breathing. */
+  .brand-breathe {
+    animation: brand-breathe 2.8s ease-in-out infinite;
+  }
+
+  /* The brand scene's region (components/scene): a soft CSS glow that is there before three.js arrives and stays
+     when WebGL is unavailable; the canvas fades in over it once its first frame is ready. */
+  .brand-backdrop {
+    background:
+      radial-gradient(60% 55% at 30% 40%, rgb(73 207 255 / 0.07), transparent 70%),
+      radial-gradient(55% 50% at 72% 62%, rgb(171 123 255 / 0.07), transparent 70%);
+  }
+  .brand-backdrop[data-variant="ambient"] {
+    mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 100%);
+  }
+  .brand-backdrop-canvas {
+    animation: fade-in var(--duration-spring-smooth) var(--ease-enter) both;
+  }
+}
+
+/* Effect region A (VPN Manager, overview topology): dashes travel along a Ready tunnel; any pause cause freezes them. */
+@keyframes topo-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.topo-flow {
+  animation: topo-dash var(--flow-duration, 1.4s) linear infinite;
+}
+
+.topo-paused .topo-flow {
+  animation-play-state: paused;
+}
+
+/*
+ * Wide data tables scroll sideways when the window is narrow or zoomed (VPN Manager): fade the edge that has more
+ * columns behind it. Scroll-linked, so nothing moves on its own; without support the table just scrolls.
+ */
+@property --scroll-fade-l {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-r {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scroll-x-fade {
+  from {
+    --scroll-fade-l: 0px;
+    --scroll-fade-r: 40px;
+  }
+  8% {
+    --scroll-fade-l: 40px;
+  }
+  92% {
+    --scroll-fade-r: 40px;
+  }
+  to {
+    --scroll-fade-l: 40px;
+    --scroll-fade-r: 0px;
+  }
+}
+@supports (animation-timeline: scroll()) {
+  .scroll-x-fade {
+    animation: scroll-x-fade linear both;
+    animation-timeline: scroll(self inline);
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 var(--scroll-fade-l),
+      #000 calc(100% - var(--scroll-fade-r)),
+      transparent
+    );
+  }
+}
+
+/*
+ * View Transitions. A page change (React <ViewTransition> around the routed content in AppShell, keyed by the page, so
+ * only a page change runs it): a 200 ms root cross-fade while the old page fades out in 140 ms (.route-exit) and the
+ * new one rises 8 px on the smooth spring (.route-enter). The named shell regions do not cross-fade then (their live
+ * new state shows at once), so the sliding navigation marker never ghosts. Sidebar collapse
+ * (:active-view-transition-type(sidebar)): sidebar, top bar and main content morph to their new size on the smooth
+ * spring; snapshots are not scaled (object-fit: none, anchored top left) and are clipped.
+ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+
+::view-transition-old(shell-sidebar),
+::view-transition-old(shell-topbar),
+::view-transition-old(main-content) {
+  animation: none;
+  opacity: 0;
+}
+
+::view-transition-new(shell-sidebar),
+::view-transition-new(shell-topbar),
+::view-transition-new(main-content) {
+  animation: none;
+}
+
+::view-transition-old(.route-exit) {
+  animation: var(--duration-exit) var(--ease-exit) both fade-out;
+}
+
+::view-transition-new(.route-enter) {
+  animation: var(--duration-spring-smooth) var(--ease-spring-smooth) both vt-rise;
+}
+
+:active-view-transition-type(sidebar) {
+  &::view-transition-group(shell-sidebar),
+  &::view-transition-group(shell-topbar),
+  &::view-transition-group(main-content) {
+    overflow: clip;
+    animation-duration: var(--duration-spring-smooth);
+    animation-timing-function: var(--ease-spring-smooth);
+  }
+
+  &::view-transition-old(shell-sidebar),
+  &::view-transition-new(shell-sidebar),
+  &::view-transition-old(shell-topbar),
+  &::view-transition-new(shell-topbar),
+  &::view-transition-old(main-content),
+  &::view-transition-new(main-content) {
+    inline-size: auto;
+    block-size: 100%;
+    object-fit: none;
+    object-position: left top;
+  }
+
+  &::view-transition-old(shell-sidebar) {
+    animation: var(--duration-exit) var(--ease-exit) both fade-out;
+  }
+
+  &::view-transition-new(shell-sidebar) {
+    animation: var(--duration-spring-smooth) var(--ease-spring-smooth) both fade-in;
+  }
+
+  &::view-transition-old(shell-topbar),
+  &::view-transition-old(main-content) {
+    animation: none;
+    opacity: 0;
+  }
+
+  &::view-transition-new(shell-topbar),
+  &::view-transition-new(main-content) {
+    animation: none;
+  }
+}
+
+/*
+ * Forced colors: keep the user's contrast choice; draw the boundaries and states the theme shows with fills, shadows,
+ * gradients or SVG strokes, which forced colors removes (fills, shadows, images) or leaves untouched (strokes).
+ */
+@media (forced-colors: active) {
+  .panel,
+  .panel-raised,
+  .overlay-surface {
+    background-image: none;
+    box-shadow: none;
+    border: 1px solid CanvasText;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* Current page, current or selected row, chosen option, segment or tab, pressed toggle. */
+  [aria-current="page"],
+  [aria-current="step"],
+  [aria-current="true"],
+  [aria-pressed="true"],
+  [aria-selected="true"],
+  [role="radio"][aria-checked="true"],
+  [role="tab"][data-state="active"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* Indicators are background fills, replaced by the system colour: draw them in Highlight. */
+  [data-tab-indicator] {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+
+  .forced-text {
+    forced-color-adjust: auto;
+  }
+
+  .brand-edge {
+    display: none;
+  }
+
+  [data-generating] {
+    outline: 2px solid Highlight;
+  }
+
+  /* A switch's state is its thumb position and track fill (VPN Manager). */
+  [role="switch"] > span {
+    background-color: CanvasText;
+  }
+  [role="switch"][data-state="checked"] {
+    background-color: Highlight;
+  }
+  [role="switch"][data-state="checked"] > span {
+    background-color: HighlightText;
+  }
+  [role="switch"]:disabled > span {
+    background-color: GrayText;
+  }
+
+  /* A meter's value is its fill; the mark is where "low" begins (VPN Manager). */
+  [role="meter"] {
+    border: 1px solid CanvasText;
+  }
+  .meter-fill {
+    background-color: Highlight;
+  }
+  .meter-mark {
+    background-color: CanvasText;
+  }
+
+  /* Topology edges are structure, not data: draw them in the text colour (VPN Manager). */
+  .topo-line {
+    stroke: CanvasText;
+    stroke-opacity: 1;
+  }
+
+  /* Legend keys name a series by the same colour as its line (SVG keeps authored colours) (VPN Manager). */
+  .swatch {
+    forced-color-adjust: none;
+  }
+
+  /*
+   * An unavailable control stays focusable (aria-disabled with its reason), so the system colours would draw it like an
+   * available one: give it the disabled text colour (an action in flight keeps its colour) (VPN Manager).
+   */
+  button[aria-disabled="true"]:not([aria-busy="true"]),
+  [role="menuitem"][aria-disabled="true"] {
+    color: GrayText;
+    border-color: GrayText;
+  }
+}

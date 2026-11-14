@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en-US" dir="ltr">
+	<head>
+		<title>Forwarded ports - AirVPN</title>
+<meta charset="utf-8">
+<!-- Excerpt of https://airvpn.org/ports/ as served to a signed-out client on 2026-11-02 (answer
+     header X-IPS-LoggedIn: 0): the header's sign-in form (the guest csrfKey replaced), the
+     page's "Login required." and air_data without a token. The top bar, which shows the
+     visitor's own IP address, and the rest of the layout are left out. -->
+<script language='javascript' type='text/javascript' src='/js/build/common.js?t=1793569384'></script>
+	</head>
+	<body class='ipsApp ipsApp_front ipsJS_none ipsClearfix' data-controller='core.front.core.app'>
+		<header>
+	<ul id='elUserNav' class='ipsList_inline cSignedOut ipsResponsive_showDesktop'>
+		<li id="elSignInLink">
+			<a href="https://airvpn.org/login/" data-ipsmenu-closeonclick="false" data-ipsmenu id="elUserSignIn">
+				Existing user? Sign In  <i class="fa fa-caret-down"></i>
+			</a>
+
+<div id='elUserSignIn_menu' class='ipsMenu ipsMenu_auto ipsHide'>
+	<form accept-charset='utf-8' method='post' action='https://airvpn.org/login/' data-controller="core.global.core.login">
+		<input type="hidden" name="csrfKey" value="fedcba9876543210fedcba9876543210">
+		<input type="hidden" name="ref" value="aHR0cHM6Ly9haXJ2cG4ub3JnL3BvcnRzLw==">
+		<div data-role="loginForm">
+
+
+
+
+<div class="ipsPad ipsForm ipsForm_vertical">
+	<h4 class="ipsType_sectionHead">Sign In</h4>
+	<br><br>
+	<ul class='ipsList_reset'>
+		<li class="ipsFieldRow ipsFieldRow_noLabel ipsFieldRow_fullWidth">
+
+
+				<input type="text" placeholder="Display Name or Email Address" name="auth">
+
+		</li>
+		<li class="ipsFieldRow ipsFieldRow_noLabel ipsFieldRow_fullWidth">
+			<input type="password" placeholder="Password" maxlength=100 minlenght=4 name="password">
+		</li>
+		<li class="ipsFieldRow ipsFieldRow_checkbox ipsClearfix">
+			<span class="ipsCustomInput">
+				<input type="checkbox" name="remember_me" id="remember_me_checkbox" value="1" checked aria-checked="true">
+				<span></span>
+			</span>
+			<div class="ipsFieldRow_content">
+				<label class="ipsFieldRow_label" for="remember_me_checkbox">Remember me</label>
+				<span class="ipsFieldRow_desc">Not recommended on shared computers</span>
+			</div>
+		</li>
+
+			<li class="ipsFieldRow ipsFieldRow_checkbox ipsClearfix">
+				<span class="ipsCustomInput">
+					<input type="checkbox" name="anonymous" id="anonymous_checkbox" value="1" aria-checked="false">
+					<span></span>
+				</span>
+				<div class="ipsFieldRow_content">
+					<label class="ipsFieldRow_label" for="anonymous_checkbox">Sign in anonymously</label>
+				</div>
+			</li>
+
+		<li class="ipsFieldRow ipsFieldRow_fullWidth">
+			<br>
+			<button type="submit" name="_processLogin" value="usernamepassword" class="ipsButton ipsButton_primary ipsButton_small" id="elSignIn_submit">Sign In</button>
+
+				<br>
+				<p class="ipsType_right ipsType_small">
+
+						<a href='https://airvpn.org/lostpassword/' data-ipsDialog data-ipsDialog-title='Forgot your password?'>
+
+					Forgot your password?</a>
+				</p>
+
+		</li>
+	</ul>
+</div>
+
+		</div>
+	</form>
+</div>
+		</li>
+	</ul>
+		</header>
+	<form accept-charset='utf-8' action='//airvpn.org/search/?do=quicksearch' method='post'>
+		<input type='search' id='elSearchField' placeholder='Search...' name='q' autocomplete='off'>
+		<button class='cSearchSubmit' type="submit"><i class="fa fa-search"></i></button>
+	</form>
+						<div class='air_page_container'><div class='air_page air_ipb_clean'><div class='message_error'>Login required.</div><div class='clear'></div></div></div>
+	<div id='air_data' data-json="{&quot;datetime_locale&quot;:&quot;browser&quot;,&quot;datetime_mode&quot;:&quot;auto&quot;}"></div><div id='eui_data' data-json="{&quot;datetime_locale&quot;:&quot;browser&quot;,&quot;datetime_mode&quot;:&quot;auto&quot;}"></div></body>
+</html>

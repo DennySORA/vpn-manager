@@ -1,0 +1,116 @@
+{
+  "locations": {
+    "br-sao": { "country": "Brazil", "city": "São Paulo", "latitude": -23.5505, "longitude": -46.6333 },
+    "ch-zrh": { "country": "Switzerland", "city": "Zurich", "latitude": 47.3769, "longitude": 8.5417 },
+    "jp-tyo": { "country": "Japan", "city": "Tokyo", "latitude": 35.6762, "longitude": 139.6503 },
+    "se-got": { "country": "Sweden", "city": "Gothenburg", "latitude": 57.70887, "longitude": 11.97456 },
+    "se-sto": { "country": "Sweden", "city": "Stockholm", "latitude": 59.3293, "longitude": 18.0686 },
+    "us-nyc": { "country": "USA", "city": "New York, NY", "latitude": 40.7128, "longitude": -74.006 },
+    "nowhere": { "country": "Nowhere", "city": "Nowhere", "latitude": 0, "longitude": 0 }
+  },
+  "wireguard": {
+    "port_ranges": [[53, 53], [123, 123], [443, 443], [4000, 33433], [33565, 51820], [52000, 60000]],
+    "ipv4_gateway": "10.64.0.1",
+    "ipv6_gateway": "fc00:bbbb:bbbb:bb01::1",
+    "shadowsocks_port_ranges": [[51900, 51949]],
+    "relays": [
+      {
+        "hostname": "se-got-wg-001",
+        "location": "se-got",
+        "active": true,
+        "owned": true,
+        "provider": "31173",
+        "ipv4_addr_in": "185.213.154.66",
+        "ipv6_addr_in": "2001:db8:5:f011::a01f",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+        "daita": true,
+        "shadowsocks_extra_addr_in": ["203.0.113.66"],
+        "features": { "daita": {}, "quic": { "addr_in": ["203.0.113.67"], "domain": "se-got-wg-001.example", "token": "public" } }
+      },
+      {
+        "hostname": "se-got-wg-002",
+        "location": "se-got",
+        "active": false,
+        "owned": true,
+        "provider": "31173",
+        "ipv4_addr_in": "185.213.154.67",
+        "ipv6_addr_in": "2001:db8:5:f011::a02f",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="
+      },
+      {
+        "hostname": "se-sto-wg-001",
+        "location": "se-sto",
+        "active": true,
+        "owned": true,
+        "provider": "31173",
+        "ipv4_addr_in": "198.51.100.10",
+        "ipv6_addr_in": "2001:db8:10::1",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo="
+      },
+      {
+        "hostname": "jp-tyo-wg-201",
+        "location": "jp-tyo",
+        "active": true,
+        "owned": false,
+        "provider": "M247",
+        "ipv4_addr_in": "198.51.100.20",
+        "include_in_country": true,
+        "weight": 50,
+        "public_key": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws="
+      },
+      {
+        "hostname": "us-nyc-wg-301",
+        "location": "us-nyc",
+        "active": true,
+        "owned": false,
+        "provider": "xtom",
+        "ipv4_addr_in": "198.51.100.30",
+        "ipv6_addr_in": "2001:db8:30::1",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw="
+      },
+      {
+        "hostname": "ch-zrh-wg-001",
+        "location": "ch-zrh",
+        "active": true,
+        "owned": true,
+        "provider": "31173",
+        "ipv4_addr_in": "198.51.100.40",
+        "ipv6_addr_in": "2001:db8:40::1",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0="
+      },
+      {
+        "hostname": "br-sao-wg-001",
+        "location": "br-sao",
+        "active": true,
+        "owned": false,
+        "provider": "Qnax",
+        "ipv4_addr_in": "198.51.100.50",
+        "ipv6_addr_in": "2001:db8:50::1",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+      },
+      {
+        "hostname": "xx-gone-wg-001",
+        "location": "xx-gone",
+        "active": true,
+        "owned": false,
+        "provider": "Gone",
+        "ipv4_addr_in": "198.51.100.60",
+        "include_in_country": true,
+        "weight": 100,
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
+      }
+    ]
+  }
+}

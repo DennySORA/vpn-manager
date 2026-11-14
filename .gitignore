@@ -1,0 +1,47 @@
+# Build outputs
+/target/
+**/node_modules/
+/web/dist/
+/web/.vite/
+*.tsbuildinfo
+/scripts/.venv/
+**/__pycache__/
+
+# Local runtime state, secrets, evidence (never committed)
+/.local/
+/.state/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# An installation inside the checkout (`vpn-installer install --root <checkout>`): its programs,
+# data, keys, sockets and logs are never repository content.
+/apps/
+/bin/
+/installer/
+/locks/
+/logs/
+/run/
+/pending-stops/
+/control.reserve
+/metrics.reserve
+/gateway.key
+/vault.key
+/ssh-projection.sha256
+
+# Specification input archive and extraction copies (source record lives in docs/process)
+/vpn-manager-spec-r3.zip
+/*.zip
+/spec-intake/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local state (agent worktrees, settings)
+/.claude/
+
+# Packaged installers (scripts/package.sh)
+/dist/

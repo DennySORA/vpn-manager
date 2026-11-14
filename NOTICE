@@ -1,0 +1,50 @@
+VPN Manager
+Copyright (c) 2026 DennySORA
+
+Licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
+(LICENSE-MIT), at your option, with one exception: the AirVPN adapter
+(`crates/providers/src/airvpn`, and its tests: `crates/providers/tests/airvpn.rs`,
+`crates/providers/tests/airvpn_site.rs`, `crates/providers/tests/support/airvpn_site.rs` and
+`crates/providers/tests/fixtures/airvpn`) is licensed under the GNU General Public License,
+version 3 or (at your option) any later version (LICENSE-GPL-3.0). "Interoperability" below
+describes its relation to AirVPN's client Eddie, which is the reason.
+
+vpnd contains that adapter, so vpnd, and an installer that carries it, are distributed under the
+GNU General Public License, version 3 or (at your option) any later version. The source code of a
+release is this repository at the release's tag.
+
+Third-party software
+
+- The programs built from this repository (vpnd with the web UI, vpnctl, vpn-installer) contain
+  third-party packages, each under its own licence. Their notices and licence texts travel with
+  every installer: `vpn-installer licenses` prints them and a release carries them as
+  `<installer>.notices.txt`. `scripts/third_party_notices.py` writes them from the lock files.
+- GotaTun (MPL-2.0, https://github.com/mullvad/gotatun) is used unmodified, as a crate.
+- `vendor/smoltcp` is smoltcp 0.14.0 (0BSD) with three patches: two TCP fixes, and TCP buffers
+  that can grow while a connection uses them. `vendor/README.md` describes them.
+- The web UI contains code adapted from Phasyn Studio (Apache-2.0) and follows conventions of
+  shadcn/ui (MIT); see `web/THIRD_PARTY_NOTICES.md`.
+
+Interoperability
+
+- The AirVPN adapter (`crates/providers/src/airvpn`; its `site/` and `status.rs` parts use
+  AirVPN's website and public status API instead) is a separate Rust implementation of the
+  bootstrap exchange of AirVPN's official client Eddie (GPL-3.0-or-later,
+  https://github.com/AirVPN/Eddie). It was written with reference to Eddie's source at commit
+  67e213bfeae270f1f26c62f454f9dfadd5342df9, and its handling of that exchange and of the server
+  manifest follows the behaviour of that source. It uses the RSA public key and the four IPv4
+  bootstrap addresses of Eddie's `resources/providers/AirVPN.json`, the exchange's parameter,
+  element and attribute names, and Eddie's defaults for the WireGuard MTU (1320), the keepalive
+  (15 s), `users_max` (100) and the server-load figure. A comparison with that commit found no
+  text of Eddie's source files in the adapter apart from those values and names. Because the
+  adapter follows Eddie's source in these ways, it is licensed under Eddie's licence,
+  GPL-3.0-or-later, and not under the licences of the rest of this repository.
+- The Mullvad adapter (`crates/providers/src/mullvad`) uses Mullvad's public API. Its paths,
+  request bodies and response shapes were written with reference to the `mullvad-api` crate of
+  the official app (GPL-3.0-or-later, https://github.com/mullvad/mullvadvpn-app). A line
+  comparison with that crate's `access.rs`, `device.rs`, `relay_list.rs`, `rest.rs` and `lib.rs`
+  at commit e8fd32f6bb7969e095b3a8056d3c39424861cd86 found no code in common beyond field names
+  that the API's JSON fixes.
+- AirVPN, Eddie, Mullvad, NextDNS and WireGuard are names of their owners; this project is not
+  affiliated with or endorsed by any of them. "WireGuard" is a registered trademark of
+  Jason A. Donenfeld.

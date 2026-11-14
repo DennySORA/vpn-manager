@@ -1,0 +1,50 @@
+[package]
+name = "vpn-providers"
+description = "Provider adapters (Mullvad, AirVPN), IP checkers (Mullvad, IPLeak) and the HTTP/1.1 client they share. Runs in the controller; every request goes through a connector the caller chooses, this crate never dials."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# MIT OR Apache-2.0 like the workspace, except the AirVPN adapter (src/airvpn and its tests), which
+# is GPL-3.0-or-later: NOTICE says why.
+license = "(MIT OR Apache-2.0) AND GPL-3.0-or-later"
+publish.workspace = true
+
+[features]
+# Lets tests trust a throwaway CA (`HttpsClient::with_roots`) and play the AirVPN bootstrap with
+# a throwaway RSA key (`AirVpn::with_rsa_key`). Never enabled in products.
+testing = []
+
+[dependencies]
+vpn-domain = { path = "../domain" }
+tokio.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+time.workspace = true
+ipnetwork.workspace = true
+aws-lc-rs.workspace = true
+base64.workspace = true
+x25519-dalek.workspace = true
+# AirVPN's website session: how a sign-in went and, at debug level, a scrubbed snippet of an
+# answer outside the known contract (never a secret).
+tracing.workspace = true
+
+[dev-dependencies]
+vpn-providers = { path = ".", features = ["testing"] }
+# Paused time: a test of a port that AirVPN never answers runs without waiting.
+tokio = { workspace = true, features = ["test-util"] }
+rcgen.workspace = true
+httparse.workspace = true
+# The website tests capture every log line to prove no secret reaches one.
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

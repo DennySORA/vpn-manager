@@ -1,0 +1,32 @@
+[package]
+name = "vpn-ipc"
+description = "Typed local IPC: length-prefixed JSON frames over Unix sockets with FD passing, build-id handshake, and the manager/worker/controller protocols."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+vpn-domain = { path = "../domain" }
+vpn-sync = { path = "../sync" }
+tokio.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+libc.workspace = true
+zeroize.workspace = true
+ipnetwork = { workspace = true, features = ["serde"] }
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+# Single-use nonces of the relay request line (`relay`) and each connector's random epoch.
+rand.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

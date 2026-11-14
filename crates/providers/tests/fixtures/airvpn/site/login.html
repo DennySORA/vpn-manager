@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en-US" dir="ltr">
+	<head>
+		<title>Sign In - AirVPN</title>
+<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Excerpt of https://airvpn.org/login/ as served to a signed-out client on 2026-11-02: the
+     sign-in form and air_data exactly as written (the guest csrfKey replaced), the surrounding
+     layout trimmed. The inline script near the end is not AirVPN's: it is there to show that
+     markup inside a script is not read as a form. -->
+<script language='javascript' type='text/javascript' src='/js/build/common.js?t=1793569384'></script>
+	</head>
+	<body class='ipsApp ipsApp_front ipsJS_none ipsClearfix' data-controller='core.front.core.app'>
+					<div id='ipsLayout_mainArea'>
+						<a id='elContent'></a>
+<form accept-charset='utf-8' method='post' action='https://airvpn.org/login/' data-controller="core.global.core.login" class='ipsBox_alt'>
+	<input type="hidden" name="csrfKey" value="0123456789abcdef0123456789abcdef">
+
+
+		<div class="ipsSpacer_both">
+			<h1 class='ipsType_reset ipsType_veryLarge ipsType_center'>Sign In</h1>
+
+				<p class='ipsType_reset ipsType_large ipsType_center ipsType_light'>
+					Don't have an account?
+
+						<a href='https://airvpn.org/register/' data-ipsDialog data-ipsDialog-size='narrow' data-ipsDialog-title='Sign Up'>
+
+					Sign Up</a>
+				</p>
+
+		</div>
+
+
+
+
+		<div class='cLogin_single ipsPos_center'>
+
+			<div class="ipsBox ipsPad">
+
+<ul class='ipsForm'>
+	<li class="ipsFieldRow ipsFieldRow_fullWidth ipsClearfix">
+
+		<label class="ipsFieldRow_label" for="auth">
+
+				Display Name or Email Address
+
+			<span class="ipsFieldRow_required">Required</span>
+		</label>
+		<div class="ipsFieldRow_content">
+
+				<input type="text" placeholder="Display Name or Email Address" name="auth" id="auth" >
+
+		</div>
+	</li>
+	<li class="ipsFieldRow ipsFieldRow_fullWidth ipsClearfix">
+		<label class="ipsFieldRow_label" for="password">
+			Password
+			<span class="ipsFieldRow_required">Required</span>
+		</label>
+		<div class="ipsFieldRow_content">
+			<input type="password" placeholder="Password" maxlength=100 minlenght=4 name="password" id="password" maxlength=100 minlenght=4 >
+		</div>
+	</li>
+	<li class="ipsFieldRow ipsFieldRow_checkbox ipsClearfix">
+		<span class="ipsCustomInput">
+			<input type="checkbox" name="remember_me" id="remember_me_checkbox" value="1" checked aria-checked="true">
+			<span></span>
+		</span>
+		<div class="ipsFieldRow_content">
+			<label class="ipsFieldRow_label" for="remember_me_checkbox">Remember me</label>
+			<span class="ipsFieldRow_desc">Not recommended on shared computers</span>
+		</div>
+	</li>
+
+		<li class="ipsFieldRow ipsFieldRow_checkbox ipsClearfix">
+			<span class="ipsCustomInput">
+				<input type="checkbox" name="anonymous" id="anonymous_checkbox" value="1" aria-checked="false">
+				<span></span>
+			</span>
+			<div class="ipsFieldRow_content">
+				<label class="ipsFieldRow_label" for="anonymous_checkbox">Sign in anonymously</label>
+			</div>
+		</li>
+
+	<li class="ipsFieldRow ipsFieldRow_fullWidth">
+		<br>
+		<button type="submit" name="_processLogin" value="usernamepassword" class="ipsButton ipsButton_primary ipsButton_small" id="elSignIn_submit">Sign In</button>
+
+			<br>
+			<p class="ipsType_right ipsType_small">
+
+					<a href='https://airvpn.org/lostpassword/' data-ipsDialog data-ipsDialog-title='Forgot your password?'>
+
+				Forgot your password?</a>
+			</p>
+
+	</li>
+</ul>
+			</div>
+		</div>
+
+</form>
+					</div>
+	<script type='text/javascript'>
+		var ipsDebug = false; if (a < b && c > d) { document.write('<form action="/login/" method="post"><input name="auth">'); }
+	</script>
+	<div id='air_data' data-json="{&quot;datetime_locale&quot;:&quot;browser&quot;,&quot;datetime_mode&quot;:&quot;auto&quot;}"></div><div id='eui_data' data-json="{&quot;datetime_locale&quot;:&quot;browser&quot;,&quot;datetime_mode&quot;:&quot;auto&quot;}"></div></body>
+</html>

@@ -1,0 +1,49 @@
+[package]
+name = "vpn-instance"
+description = "One VPN Instance worker: Instance Controller, DNS Controller, Gateway Manager, Port Controller, Instance Metrics and the inner watchdog."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Loopback-only TunnelConnector for unit tests of DNS/Gateway code. Never enabled in products.
+testing = []
+
+[dependencies]
+zeroize.workspace = true
+vpn-domain = { path = "../domain" }
+vpn-tunnel = { path = "../tunnel" }
+vpn-ipc = { path = "../ipc" }
+vpn-platform = { path = "../platform" }
+vpn-sync = { path = "../sync" }
+tokio.workspace = true
+tokio-util.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+ipnetwork.workspace = true
+rand.workspace = true
+hickory-proto.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+lru.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# The relay test reads a reply line.
+serde_json.workspace = true
+vpn-instance = { path = ".", features = ["testing"] }
+# A real WireGuard peer that connects in to the client's tunnel address (port forwards).
+vpn-labpeer = { path = "../labpeer" }
+tokio = { workspace = true, features = ["test-util"] }
+rcgen.workspace = true
+
+[lints]
+workspace = true

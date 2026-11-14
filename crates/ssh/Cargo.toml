@@ -1,0 +1,26 @@
+[package]
+name = "vpn-ssh"
+description = "SSH Manager: read-only parsing of the user's ssh_config, the generated vpn-manager.conf projection, safe file operations and the SOCKS5 client behind `vpnctl ssh-proxy`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vpn-domain = { path = "../domain" }
+vpn-ipc = { path = "../ipc" }
+rand.workspace = true
+zeroize.workspace = true
+tokio.workspace = true
+libc.workspace = true
+sha2.workspace = true
+hex.workspace = true
+time.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

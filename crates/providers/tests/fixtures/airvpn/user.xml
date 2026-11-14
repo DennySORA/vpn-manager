@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic act=user answer, shaped as Eddie reads it (Providers/Service.cs). The private
+     keys are the RFC 7748 section 6.1 test vectors, the other keys byte patterns: no account,
+     no real key. -->
+<user wg_public_key="MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=" login="synthetic-user" expirationdate="1798761600" message="" ca="-----BEGIN CERTIFICATE-----&#10;SYNTHETIC&#10;-----END CERTIFICATE-----" ta="SYNTHETIC" tls_crypt="SYNTHETIC" ssl_crt="SYNTHETIC">
+	<keys>
+		<key name="Laptop" crt="-----BEGIN CERTIFICATE-----&#10;SYNTHETIC&#10;-----END CERTIFICATE-----" key="-----BEGIN PRIVATE KEY-----&#10;SYNTHETIC&#10;-----END PRIVATE KEY-----" wg_private_key="dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=" wg_ipv4="10.167.10.2/32" wg_ipv6="fdaa:bbbb:cccc:dddd:1:2:3:4/128" wg_dns_ipv4="10.128.0.1" wg_dns_ipv6="fdaa:bbbb:cccc:dddd::1" wg_preshared="ERERERERERERERERERERERERERERERERERERERERERE=" />
+		<key wg_preshared="IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=" wg_dns_ipv4="10.128.0.1" wg_ipv4="10.167.10.3/32" wg_ipv6="" wg_private_key="XasIfmJKikt54X+Lg4AO5m87sSkmGLb9HC+LJ/+I4Os=" name="Phone &amp; Tablet"></key>
+	</keys>
+</user>

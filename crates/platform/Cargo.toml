@@ -1,0 +1,38 @@
+[package]
+name = "vpn-platform"
+description = "Platform Manager: the only owner of OS operations (key files, process spawn, loopback listeners, resource sampling, capability detection, sandboxes)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vpn-domain = { path = "../domain" }
+libc.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+zeroize.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# The sandbox holder's control messages (JSON over SOCK_SEQPACKET).
+serde.workspace = true
+# Managed Apps: executable digests and the unified-log denial count (ndjson).
+sha2.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+# Allow lists of networks other hosts may connect from (access ports, the web UI).
+ipnetwork.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+
+# The test binary doubles as the sandbox holder, which must start single-threaded.
+[[test]]
+name = "sandbox"
+harness = false
+
+[lints]
+workspace = true

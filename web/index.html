@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en" data-theme="noir" style="background: #070b14; color-scheme: dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#070b14" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>VPN Manager</title>
+    <!-- Boot screen: shown from the first paint until React renders (static, no script; CSP allows inline styles).
+         It carries the product name only: the language is chosen by the script (src/i18n), which also sets `lang`. -->
+    <style>
+      .boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(60% 55% at 30% 40%, rgb(73 207 255/0.07), transparent 70%),
+          radial-gradient(55% 50% at 72% 62%, rgb(171 123 255/0.07), transparent 70%), #070b14;
+        color: #b5bfd9;
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+      }
+      .boot span {
+        display: grid;
+        justify-items: center;
+        gap: 12px;
+        animation: boot-in 180ms cubic-bezier(0.05, 0.7, 0.1, 1) 160ms both;
+      }
+      .boot svg {
+        filter: drop-shadow(0 0 10px rgb(62 137 255/0.45));
+        animation: boot-breathe 2.8s ease-in-out infinite;
+      }
+      @keyframes boot-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+      }
+      @keyframes boot-breathe {
+        50% {
+          opacity: 0.55;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot" role="status">
+        <span>
+          <svg width="40" height="40" viewBox="0 0 32 32" aria-hidden="true">
+            <defs>
+              <linearGradient id="boot-g" x1="4" y1="3" x2="28" y2="29" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#49cfff" />
+                <stop offset=".38" stop-color="#3e89ff" />
+                <stop offset=".7" stop-color="#727dff" />
+                <stop offset="1" stop-color="#ab7bff" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M16 2.5 4.5 7v8.2c0 6.9 4.7 12.3 11.5 14.3 6.8-2 11.5-7.4 11.5-14.3V7L16 2.5Z"
+              fill="#0b1120"
+              stroke="url(#boot-g)"
+              stroke-width="2"
+            />
+            <path
+              d="m10.8 15.6 3.6 3.6 7-7.2"
+              fill="none"
+              stroke="url(#boot-g)"
+              stroke-width="2.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          VPN Manager
+        </span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

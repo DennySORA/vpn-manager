@@ -1,0 +1,10 @@
+# Not part of the public repository (scripts/public_export.py exports with `git archive`, which leaves these
+# out): the maintainer's work log with its evidence, and the instructions for coding agents.
+/docs/process export-ignore
+/docs/agent export-ignore
+/docs/AGENTS.md export-ignore
+/docs/CLAUDE.md export-ignore
+/AGENTS.md export-ignore
+/CLAUDE.md export-ignore
+/POLICY_MANIFEST.sha256 export-ignore
+/POLICY_VERSION export-ignore

@@ -1,0 +1,18 @@
+# pnpm settings for the web owner (pnpm 12; the version is pinned by package.json "packageManager").
+engineStrict: true
+strictPeerDependencies: true
+strictDepBuilds: true
+verifyDepsBeforeRun: error
+# dependency-cruiser loads the project's TypeScript without declaring it. Left to itself it finds the TypeScript 7
+# of `typescript-native`, which it does not support yet, and checks no module at all.
+packageExtensions:
+  dependency-cruiser:
+    peerDependencies:
+      typescript: ">=2.0.0 <7.0.0"
+# eslint-plugin-jsx-a11y 6.10.2 (its newest release, 2024-10) declares ESLint up to 9. It uses none of the
+# `context` and `SourceCode` members ESLint 10 removed, and under ESLint 10 it reports the same problems as
+# under 9 (compared on 2026-11-11). The entry names that one version: a newer release is checked
+# again, and the entry goes once a release declares ESLint 10 itself.
+peerDependencyRules:
+  allowedVersions:
+    "eslint-plugin-jsx-a11y@6.10.2>eslint": "10"

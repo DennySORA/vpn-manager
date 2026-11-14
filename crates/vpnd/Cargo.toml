@@ -1,0 +1,46 @@
+[package]
+name = "vpnd"
+description = "VPN Manager daemon: one executable, three roles (controller, manager, instance worker)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vpnd"
+path = "src/main.rs"
+
+[dependencies]
+vpn-domain = { path = "../domain" }
+vpn-ipc = { path = "../ipc" }
+vpn-store = { path = "../store" }
+vpn-platform = { path = "../platform" }
+vpn-instance-manager = { path = "../instance-manager" }
+vpn-controller = { path = "../controller" }
+vpn-instance = { path = "../instance" }
+vpn-web-provide = { path = "../web-provide" }
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+libc.workspace = true
+# `vpnd controller --allow-client`: networks (CIDR).
+ipnetwork.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
+vpn-labpeer = { path = "../labpeer" }
+zeroize.workspace = true
+uuid.workspace = true
+# tests/lifecycle.rs: services of its own inside the lab peers' tunnels (vpn-tunnel, ipnetwork,
+# hickory-proto), and the control database's write lock held as another process would (rusqlite).
+vpn-tunnel = { path = "../tunnel" }
+ipnetwork.workspace = true
+hickory-proto.workspace = true
+rusqlite.workspace = true
+
+[lints]
+workspace = true

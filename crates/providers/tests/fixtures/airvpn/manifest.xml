@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic act=manifest answer, shaped as Eddie reads it (Providers/Service.cs,
+     ConnectionMode.cs). Names, addresses and figures are made up and never dialled. -->
+<manifest time="1798761600" next_update="30" auth_rsa_exponent="AQAB" openvpn_directives="client&#10;&#9;dev tun&#10;" dns_check_host="example.invalid">
+	<messages>
+		<message kind="promo" text="Synthetic &quot;promo&quot; &#x2014; ignored" />
+	</messages>
+	<modes>
+		<mode title="OpenVPN UDP 443" type="openvpn" protocol="UDP" port="443" entry_index="0" openvpn_directives="proto udp" />
+		<mode title="WireGuard UDP 1637" type="wireguard" protocol="UDP" port="1637" entry_index="0" />
+		<mode title="WireGuard UDP 47107" type="wireguard" protocol="UDP" port="47107" entry_index="0" />
+		<mode title="WireGuard UDP 51820" type="wireguard" protocol="udp" port="51820" />
+		<mode title="WireGuard UDP 1637, entry 2" type="wireguard" protocol="UDP" port="1637" entry_index="1" />
+		<mode title="WireGuard UDP 443, entry 2" type="wireguard" protocol="UDP" port="443" entry_index="1" />
+		<mode title="OpenVPN TCP 443, entry 2" type="openvpn" protocol="TCP" port="443" entry_index="1" />
+	</modes>
+	<servers_groups>
+		<servers_group group="1" country_code="ch" location="Zurich" bw_max="1000" users_max="250" support_ipv4="true" support_ipv6="true" />
+		<servers_group group="2" country_code="nl" location="Amsterdam" bw_max="2000" support_ipv4="true" support_ipv6="false" />
+	</servers_groups>
+	<servers>
+		<server name="Gacrux" group="1" ips_entry="192.0.2.10,2a00:1111:2222:5::10" warning_open="Synthetic notice" />
+		<server name="Alchiba" group="1" ips_entry="185.100.1.10,185.100.1.11,2a00:1111:2222:1::10,2a00:1111:2222:1::11" ips_exit="185.100.1.20,2a00:1111:2222:1::20" bw="12500000" users="42" scorebase="0" />
+		<server name="Castor" group="2" location="Den Haag" ips_entry="185.100.2.10,185.100.2.11" bw="62500000" bw_max="1000" users="10" warning_closed="Synthetic maintenance" warning_open="Synthetic notice" />
+		<server name="Diadem" group="1" country_code="se" location=" Stockholm&#10;" ips_entry="2a00:1111:2222:3::10, 2a00:1111:2222:3::11" users="25" />
+		<server name="Elnath" group="2" ips_entry="10.0.0.5,10.0.0.6,fe80::1" bw="0" />
+		<server name="Furud" country_code="jp" location="Tokyo" ips_entry="185.100.4.10" />
+	</servers>
+	<urls>
+		<url address="http://203.0.113.1" />
+	</urls>
+</manifest>

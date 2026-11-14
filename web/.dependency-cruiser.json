@@ -1,0 +1,51 @@
+{
+  "forbidden": [
+    {
+      "name": "lib-and-api-are-the-bottom",
+      "comment": "The layers of src, from the bottom: lib and api, components, features, app; a layer imports only from the layers below it (type-only imports count). src/lib and src/api know nothing of components, features or the app.",
+      "severity": "error",
+      "from": { "path": "^src/(lib|api)/" },
+      "to": { "path": "^src/(components|features|app)/" }
+    },
+    {
+      "name": "components-below-features",
+      "comment": "A shared component takes what it shows through props. One that needs a feature belongs to that feature, or is handed it by the app.",
+      "severity": "error",
+      "from": { "path": "^src/components/" },
+      "to": { "path": "^src/(features|app)/" }
+    },
+    {
+      "name": "features-below-app",
+      "comment": "src/app composes the features (router, shell); no feature reaches back into it.",
+      "severity": "error",
+      "from": { "path": "^src/features/" },
+      "to": { "path": "^src/app/" }
+    },
+    {
+      "name": "test-support-only-in-tests",
+      "comment": "src/test holds what the boundary tests share; shipped code never imports it.",
+      "severity": "error",
+      "from": { "pathNot": "(\\.test\\.tsx?$|^src/test/)" },
+      "to": { "path": "^src/test/" }
+    },
+    {
+      "name": "no-circular",
+      "comment": "Modules that import each other, directly or through others, cannot be understood or loaded apart.",
+      "severity": "error",
+      "from": {},
+      "to": { "circular": true }
+    },
+    {
+      "name": "no-orphans",
+      "comment": "A module nothing imports and that imports nothing is a leftover.",
+      "severity": "error",
+      "from": { "orphan": true },
+      "to": {}
+    }
+  ],
+  "options": {
+    "doNotFollow": { "path": "node_modules" },
+    "tsPreCompilationDeps": true,
+    "tsConfig": { "fileName": "tsconfig.json" }
+  }
+}

@@ -1,0 +1,50 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# `clippy::multiple_crate_versions` (cargo group): these duplicates come from pinned third-party
+# stacks the workspace cannot unify — GotaTun `=0.10.3` (ADR-0001: RustCrypto 0.10 generation,
+# x25519-dalek 2, rand 0.9, base64 0.22, thiserror 1), russh `=0.65.1` (RustCrypto 0.11
+# generation), hickory-proto (rand 0.10), smoltcp (bitflags 1), rustls/ring (untrusted 0.7) and
+# the platform crates below them. The workspace's own code uses the newest release of each. Each
+# entry was reviewed with `cargo tree -i <crate>@<version>` on 2026-11-06, and `base64`,
+# `chacha20poly1305` and `x25519-dalek` (only GotaTun needs the older one) on 2026-11-11; a new
+# duplicate still fails.
+#
+# `parking_lot` with `lock_api`, `parking_lot_core` and its `redox_syscall` (2026-11-11): the
+# workspace's own locks are parking_lot 0.13 inside `vpn-sync`; GotaTun, tokio and dashmap still
+# need 0.12 for theirs.
+allowed-duplicate-crates = [
+    "aead",
+    "base64",
+    "bitflags",
+    "blake2",
+    "block-buffer",
+    "chacha20",
+    "chacha20poly1305",
+    "cipher",
+    "cpufeatures",
+    "crypto-common",
+    "curve25519-dalek",
+    "digest",
+    "fiat-crypto",
+    "generic-array",
+    "getrandom",
+    "hashbrown",
+    "hmac",
+    "inout",
+    "lock_api",
+    "parking_lot",
+    "parking_lot_core",
+    "poly1305",
+    "r-efi",
+    "rand",
+    "rand_core",
+    "redox_syscall",
+    "syn",
+    "thiserror",
+    "thiserror-impl",
+    "universal-hash",
+    "untrusted",
+    "windows-sys",
+    "x25519-dalek",
+]

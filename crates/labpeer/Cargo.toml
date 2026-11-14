@@ -1,0 +1,32 @@
+[package]
+name = "vpn-labpeer"
+description = "Controlled WireGuard test peer (GotaTun + netstack) with in-tunnel echo/HTTP/DNS services, for integration tests and demos."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vpn-labpeer"
+path = "src/main.rs"
+
+[dependencies]
+vpn-tunnel = { path = "../tunnel" }
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+hickory-proto.workspace = true
+ipnetwork.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

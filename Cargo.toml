@@ -1,0 +1,129 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# Patched third-party sources (vendor/README.md): dependencies, not members.
+exclude = ["vendor/smoltcp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# WireGuard: embedded as a pinned crate dependency, never forked or vendored (DEPENDENCIES.md / ADR-0002).
+gotatun = { version = "=0.10.3", default-features = false, features = ["device", "aws-lc-rs"] }
+# smoltcp 0.14.0 with a small patch, from vendor/smoltcp (see [patch.crates-io] and vendor/README.md).
+smoltcp = { version = "=0.14.0", default-features = false, features = [
+    "std",
+    "log",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv6",
+    "proto-ipv4-fragmentation",
+    "socket-tcp",
+    # Both congestion controllers: a transport profile chooses one for its flows.
+    "socket-tcp-cubic",
+    "socket-tcp-reno",
+    "socket-udp",
+    "async",
+    "assembler-max-segment-count-32",
+    # Room for the test peer's extra address (a host beyond the VPN server, port-forward tests);
+    # the product's stacks carry only the profile's first IPv4 and IPv6 address.
+    "iface-max-addr-count-4",
+] }
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["rt"] }
+bytes = "1.12.1"
+crossbeam-queue = "0.3.14"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+zeroize = { version = "1.9.1", features = ["derive"] }
+ipnetwork = "0.21.1"
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+uuid = { version = "1.29.2", features = ["v4", "serde"] }
+time = { version = "0.3.55", features = ["serde", "formatting", "parsing", "macros"] }
+# Only the scalar engine is used: the SIMD engines (default feature `simd-unsafe`) stay out.
+base64 = { version = "0.23.1", default-features = false, features = ["std"] }
+sha2 = "0.11.1"
+hex = "0.4.3"
+libc = "0.2.191"
+hickory-proto = { version = "0.26.3", default-features = false, features = ["std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12", "logging"] }
+webpki-roots = "1.0.12"
+hyper = { version = "1.12.0", features = ["client", "server", "http1", "http2"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+http = "1.5.0"
+http-body-util = "0.1.5"
+httparse = "1.10.1"
+lru = "0.19.0"
+rcgen = "0.14.10"
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+crossbeam-channel = "0.5.17"
+chacha20poly1305 = "0.11.0"
+hmac = "0.13.0"
+# AirVPN bootstrap (RSA-PKCS#1 v1.5 + AES-256-CBC) and its device public keys (X25519). Both are
+# already in the build: aws-lc-rs is the rustls and gotatun provider, x25519-dalek is gotatun's.
+aws-lc-rs = "1.19.0"
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
+tempfile = "3.27.0"
+axum = { version = "0.8.9", features = ["macros"] }
+futures-util = "0.3.34"
+clap = { version = "4.6.7", features = ["derive"] }
+ts-rs = { version = "12.0.1", features = ["serde-compat", "uuid-impl", "serde-json-impl", "no-serde-warnings"] }
+# SSH download (crates/ssh-download): a pure-Rust SSH client and SFTP over any stream — here the
+# SOCKS5 stream of a Gateway. aws-lc-rs is the build's crypto provider already (rustls, gotatun).
+# No `rsa` feature: it brings the `rsa` crate at a pre-release with RUSTSEC-2023-0071 open, so
+# RSA user and host keys are not supported (ed25519 and ECDSA are). No libssh2 or other C library.
+russh = { version = "=0.65.1", default-features = false, features = ["aws-lc-rs"] }
+russh-sftp = "=3.0.1"
+
+# Strict static gates (docs/development.md, "靜態檢查"): every warning is an error. Unsafe code is
+# denied everywhere; crates without FFI forbid it at their root, and each FFI module states its
+# boundary in a file-scoped `allow(unsafe_code, reason = ...)`.
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+# Off by default (Rust 1.99): a raw pointer is taken with `&raw`, not through a reference.
+raw_borrows_via_references = "deny"
+
+# Clippy's default, pedantic, nursery and cargo groups, all denied; single lints below.
+# Cargo's own lints (Rust 1.100): what is on by default is an error here, the pedantic ones too.
+[workspace.lints.cargo]
+default = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+# Every allow/expect states why (restriction lint, opted in).
+allow_attributes_without_reason = "deny"
+
+# Third-party code (crypto, hashing, smoltcp, hyper) is optimized even in dev builds, so local
+# runs and tests exercise realistic speeds; our own crates stay fast to compile.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+panic = "unwind"
+
+# smoltcp 0.14.0 plus what no release has yet (vendor/README.md): two TCP fixes — segments without
+# payload carry the highest sequence number sent, and a lone FIN is fast-retransmitted — and the
+# buffers of an open socket can be replaced by larger ones.
+[patch.crates-io]
+smoltcp = { path = "vendor/smoltcp" }

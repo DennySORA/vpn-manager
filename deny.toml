@@ -1,0 +1,52 @@
+# cargo-deny: the advisory, licence, ban and source gate for the Rust workspace (docs/development.md,
+# 「靜態檢查」). Run with the repo-local tool: `target/tools/bin/cargo-deny --locked check` (install it with
+# `cargo install cargo-deny --locked --root target/tools`). Duplicate versions are Clippy's gate
+# (`clippy::multiple_crate_versions` with the reviewed list in clippy.toml), so `bans` does not repeat it.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every RustSec advisory (vulnerability, unmaintained, unsound, yanked) fails; an exception needs an entry
+# here with the advisory ID and the reason it does not apply.
+yanked = "deny"
+unmaintained = "all"
+
+[licenses]
+confidence-threshold = 0.93
+# Permissive licences, plus CDLA-Permissive-2.0 (the Mozilla root list data in webpki-roots). The binaries' notices are written by scripts/third_party_notices.py.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+# GotaTun (ADR-0001, the WireGuard implementation) is MPL-2.0: file-level copyleft, used unmodified.
+exceptions = [{ allow = ["MPL-2.0"], crate = "gotatun" }]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+# The workspace's locks come from `vpn-sync`, which adds the hand-over schedule parking_lot 0.13
+# no longer has (crates/sync/src/lib.rs). No other crate may depend on that generation itself.
+# GotaTun and tokio are on 0.12 for their own locks; when one of them moves, it is reviewed and
+# named here.
+deny = [{ crate = "parking_lot:>=0.13.0", wrappers = ["vpn-sync"] }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,35 @@
+[package]
+name = "vpnctl"
+description = "VPN Manager command-line companion: the VPN Web API over the controller's api.sock (HTTP/1.1 on a Unix socket), and `vpnctl ssh-proxy`, the ProxyCommand of SSH hosts routed through a Gateway."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vpnctl"
+path = "src/main.rs"
+
+[dependencies]
+vpn-ssh = { path = "../ssh" }
+vpn-domain = { path = "../domain" }
+# Only for where api.sock is (the same paths the daemons use).
+vpn-platform = { path = "../platform" }
+tokio.workspace = true
+clap.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+# Credentials typed into `vpnctl provider account add`: read without echo, wiped after use.
+libc.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

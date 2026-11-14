@@ -1,0 +1,42 @@
+[package]
+name = "vpn-instance-manager"
+description = "Instance Manager: the only lifecycle owner of VPN Instances (actors, generations, recovery, outer watchdog)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vpn-ssh = { path = "../ssh" }
+vpn-domain = { path = "../domain" }
+vpn-ipc = { path = "../ipc" }
+vpn-store = { path = "../store" }
+vpn-platform = { path = "../platform" }
+vpn-tunnel = { path = "../tunnel" }
+vpn-performance = { path = "../performance" }
+# SSH download: an internal component the manager hosts (its own crate; see `downloads.rs`).
+vpn-ssh-download = { path = "../ssh-download" }
+vpn-sync = { path = "../sync" }
+futures-util.workspace = true
+libc.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
+ipnetwork.workspace = true
+zeroize.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Holds the control database's write lock as another process would, so Store writes fail; the
+# Provider egress tests write the database behind the manager's back (the schema refuses).
+rusqlite.workspace = true
+
+[lints]
+workspace = true

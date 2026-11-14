@@ -1,0 +1,32 @@
+[package]
+name = "vpn-tunnel"
+description = "GotaTun integration, pinned WireGuard underlay and the per-Instance userspace netstack (TunnelConnector)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+vpn-sync = { path = "../sync" }
+gotatun.workspace = true
+smoltcp.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+crossbeam-queue.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+ipnetwork.workspace = true
+rand.workspace = true
+# The strict filter's unanswered App flows, kept least recently active first.
+lru.workspace = true
+# Strict mode (Linux): TUN ioctls, socket options and interface enumeration in the sandbox
+# namespace; everywhere: the underlay's `ENOBUFS`.
+libc.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
