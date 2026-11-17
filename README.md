@@ -6,6 +6,11 @@
 
 Run several WireGuard exits side by side on your own computer, and decide which programs use which one.
 
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-APACHE)
+[![Release](https://img.shields.io/github/v/release/DennySORA/vpn-manager)](https://github.com/DennySORA/vpn-manager/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/DennySORA/vpn-manager#install)
+[![Stars](https://img.shields.io/github/stars/DennySORA/vpn-manager)](https://github.com/DennySORA/vpn-manager/stargazers)
+
 Each exit is reachable as a local SOCKS5/HTTP proxy, and a program you choose can be started so that the tunnel is its only way out. VPN Manager runs as your own user: no root, no kernel module, and your computer's routes, firewall and DNS stay exactly as they are. Everything else on the machine keeps using the normal network.
 
 **The one promise: protected traffic either leaves through the tunnel of its connection, or it fails. It never falls back to the normal network.**
